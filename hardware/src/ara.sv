@@ -203,10 +203,14 @@ module ara import ara_pkg::*; #(
   elen_t     [NrLanes-1:0]                     sldu_addrgen_operand;
   target_fu_e[NrLanes-1:0]                     sldu_addrgen_operand_target_fu;
   logic      [NrLanes-1:0]                     sldu_addrgen_operand_valid;
-  logic      [NrLanes-1:0]                     sldu_operand_ready;
-  sldu_mux_e                                   sldu_mux_sel;
   logic                                        addrgen_operand_ready;
-  logic      [NrLanes-1:0]                     sldu_red_valid;
+  // Slide Units
+  logic      [NrLanes-1:0]                     sldu_prev_valid_i;
+  logic      [NrLanes-1:0]                     sldu_next_valid_o;
+  logic      [NrLanes-1:0]                     sldu_prev_valid_i;
+  logic      [NrLanes-1:0]                     sldu_next_valid_o;
+  elen_t     [NrLanes-1:0]                     sldu_prev_data;
+  elen_t     [NrLanes-1:0]                     sldu_next_data;
 
   // Results
   // Load Unit
@@ -217,14 +221,6 @@ module ara import ara_pkg::*; #(
   strb_t     [NrLanes-1:0]                     ldu_result_be;
   logic      [NrLanes-1:0]                     ldu_result_gnt;
   logic      [NrLanes-1:0]                     ldu_result_final_gnt;
-  // Slide Unit
-  logic      [NrLanes-1:0]                     sldu_result_req;
-  vid_t      [NrLanes-1:0]                     sldu_result_id;
-  vaddr_t    [NrLanes-1:0]                     sldu_result_addr;
-  elen_t     [NrLanes-1:0]                     sldu_result_wdata;
-  strb_t     [NrLanes-1:0]                     sldu_result_be;
-  logic      [NrLanes-1:0]                     sldu_result_gnt;
-  logic      [NrLanes-1:0]                     sldu_result_final_gnt;
   // Mask Unit
   logic      [NrLanes-1:0]                     masku_result_req;
   vid_t      [NrLanes-1:0]                     masku_result_id;
@@ -261,14 +257,6 @@ module ara import ara_pkg::*; #(
       .alu_vinsn_done_o                (alu_vinsn_done[lane]                ),
       .mfpu_vinsn_done_o               (mfpu_vinsn_done[lane]               ),
       .global_hazard_table_i           (global_hazard_table                 ),
-      // Interface with the slide unit
-      .sldu_result_req_i               (sldu_result_req[lane]               ),
-      .sldu_result_addr_i              (sldu_result_addr[lane]              ),
-      .sldu_result_id_i                (sldu_result_id[lane]                ),
-      .sldu_result_wdata_i             (sldu_result_wdata[lane]             ),
-      .sldu_result_be_i                (sldu_result_be[lane]                ),
-      .sldu_result_gnt_o               (sldu_result_gnt[lane]               ),
-      .sldu_result_final_gnt_o         (sldu_result_final_gnt[lane]         ),
       // Interface with the load unit
       .ldu_result_req_i                (ldu_result_req[lane]                ),
       .ldu_result_addr_i               (ldu_result_addr[lane]               ),
@@ -286,9 +274,15 @@ module ara import ara_pkg::*; #(
       .sldu_addrgen_operand_target_fu_o(sldu_addrgen_operand_target_fu[lane]),
       .sldu_addrgen_operand_valid_o    (sldu_addrgen_operand_valid[lane]    ),
       .addrgen_operand_ready_i         (addrgen_operand_ready               ),
-      .sldu_mux_sel_i                  (sldu_mux_sel                        ),
-      .sldu_operand_ready_i            (sldu_operand_ready[lane]            ),
-      .sldu_red_valid_i                (sldu_red_valid[lane]                ),
+      // Interface with other Slide units
+      .sldu_prev_valid_i               (sldu_prev_valid_i                   ),
+      .sldu_next_valid_i               (sldu_next_valid_i                   ),
+      .sldu_prev_data_i                (sldu_next_data[lane]                ),
+      .sldu_next_data_i                (sldu_prev_data[lane]                ),
+      .sldu_prev_ready_o               (sldu_prev_ready_o                   ),
+      .sldu_next_ready_o               (sldu_next_ready_o                   ),
+      .sldu_prev_data_o                (sldu_prev_data[lane-1]              ),
+      .sldu_next_data_o                (sldu_next_data[lane+1]              ),
       // Interface with the mask unit
       .mask_operand_o                  (masku_operand[lane]                 ),
       .mask_operand_valid_o            (masku_operand_valid[lane]           ),
@@ -372,44 +366,6 @@ module ara import ara_pkg::*; #(
     .ldu_result_final_gnt_i     (ldu_result_final_gnt                                  )
   );
 
-  //////////////////
-  //  Slide unit  //
-  //////////////////
-
-  // Interface with the Mask Unit
-  logic sldu_mask_ready;
-
-  sldu #(
-    .NrLanes(NrLanes),
-    .vaddr_t(vaddr_t)
-  ) i_sldu (
-    .clk_i                   (clk_i                            ),
-    .rst_ni                  (rst_ni                           ),
-    // Interface with the main sequencer
-    .pe_req_i                (pe_req                           ),
-    .pe_req_valid_i          (pe_req_valid                     ),
-    .pe_vinsn_running_i      (pe_vinsn_running                 ),
-    .pe_req_ready_o          (pe_req_ready[NrLanes+OffsetSlide]),
-    .pe_resp_o               (pe_resp[NrLanes+OffsetSlide]     ),
-    // Interface with the lanes
-    .sldu_operand_i          (sldu_addrgen_operand             ),
-    .sldu_operand_target_fu_i(sldu_addrgen_operand_target_fu   ),
-    .sldu_operand_valid_i    (sldu_addrgen_operand_valid       ),
-    .sldu_operand_ready_o    (sldu_operand_ready               ),
-    .sldu_result_req_o       (sldu_result_req                  ),
-    .sldu_result_addr_o      (sldu_result_addr                 ),
-    .sldu_result_id_o        (sldu_result_id                   ),
-    .sldu_result_be_o        (sldu_result_be                   ),
-    .sldu_result_wdata_o     (sldu_result_wdata                ),
-    .sldu_result_gnt_i       (sldu_result_gnt                  ),
-    .sldu_mux_sel_o          (sldu_mux_sel                     ),
-    .sldu_red_valid_o        (sldu_red_valid                   ),
-    .sldu_result_final_gnt_i (sldu_result_final_gnt            ),
-    // Interface with the Mask unit
-    .mask_i                  (mask                             ),
-    .mask_valid_i            (mask_valid                       ),
-    .mask_ready_o            (sldu_mask_ready                  )
-  );
 
   /////////////////
   //  Mask unit  //
@@ -446,8 +402,7 @@ module ara import ara_pkg::*; #(
     .mask_valid_lane_o       (mask_valid_lane                 ),
     .lane_mask_ready_i       (lane_mask_ready                 ),
     .vldu_mask_ready_i       (vldu_mask_ready                 ),
-    .vstu_mask_ready_i       (vstu_mask_ready                 ),
-    .sldu_mask_ready_i       (sldu_mask_ready                 )
+    .vstu_mask_ready_i       (vstu_mask_ready                 )
   );
 
   //////////////////

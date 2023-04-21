@@ -23,24 +23,37 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     input  logic     [NrVInsn-1:0] pe_vinsn_running_i,
     output logic                   pe_req_ready_o,
     output pe_resp_t               pe_resp_o,
-    // Interface with the lanes
-    input  elen_t    [NrLanes-1:0] sldu_operand_i,
-    input  target_fu_e [NrLanes-1:0] sldu_operand_target_fu_i,
-    input  logic     [NrLanes-1:0] sldu_operand_valid_i,
-    output logic     [NrLanes-1:0] sldu_operand_ready_o,
-    output logic     [NrLanes-1:0] sldu_result_req_o,
-    output vid_t     [NrLanes-1:0] sldu_result_id_o,
-    output vaddr_t   [NrLanes-1:0] sldu_result_addr_o,
-    output elen_t    [NrLanes-1:0] sldu_result_wdata_o,
-    output strb_t    [NrLanes-1:0] sldu_result_be_o,
-    input  logic     [NrLanes-1:0] sldu_result_gnt_i,
-    input  logic     [NrLanes-1:0] sldu_result_final_gnt_i,
+    // Interface with lane
+    input  elen_t                  sldu_operand_i,
+    input  target_fu_e             sldu_operand_target_fu_i,
+    input  logic                   sldu_operand_valid_i,
+    output logic                   sldu_operand_ready_o,
+    output logic                   sldu_result_req_o,
+    output vid_t                   sldu_result_id_o,
+    output vaddr_t                 sldu_result_addr_o,
+    output elen_t                  sldu_result_wdata_o,
+    output strb_t                  sldu_result_be_o,
+    input  logic                   sldu_result_gnt_i,
+    input  logic                   sldu_result_final_gnt_i,
+    // Interface with other Slide units
+    input  logic                   sldu_prev_valid_i,
+    input  logic                   sldu_next_valid_i,
+    input  logic                   sldu_prev_ready_i,
+    input  logic                   sldu_next_ready_i,
+    input  elen_t                  sldu_prev_data_i,
+    input  elen_t                  sldu_next_data_i,
+    output logic                   sldu_prev_valid_o,
+    output logic                   sldu_next_valid_o,
+    output logic                   sldu_prev_ready_o,
+    output logic                   sldu_next_ready_o,
+    output elen_t                  sldu_prev_data_o,
+    output elen_t                  sldu_next_data_o,
     // Support for reductions
     output sldu_mux_e              sldu_mux_sel_o,
-    output logic     [NrLanes-1:0] sldu_red_valid_o,
+    output logic                   sldu_red_valid_o,
     // Interface with the Mask Unit
-    input  strb_t    [NrLanes-1:0] mask_i,
-    input  logic     [NrLanes-1:0] mask_valid_i,
+    input  strb_t                  mask_i,
+    input  logic                   mask_valid_i,
     output logic                   mask_ready_o
   );
 
@@ -118,20 +131,20 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
   } payload_t;
 
   // Result queue
-  payload_t [ResultQueueDepth-1:0][NrLanes-1:0] result_queue_d, result_queue_q;
-  logic     [ResultQueueDepth-1:0][NrLanes-1:0] result_queue_valid_d, result_queue_valid_q;
+  payload_t [ResultQueueDepth-1:0]            result_queue_d, result_queue_q;
+  logic     [ResultQueueDepth-1:0]            result_queue_valid_d, result_queue_valid_q;
   // We need two pointers in the result queue. One pointer to
   // indicate with `payload_t` we are currently writing into (write_pnt),
   // and one pointer to indicate which `payload_t` we are currently
   // reading from and writing into the lanes (read_pnt).
-  logic     [idx_width(ResultQueueDepth)-1:0]   result_queue_write_pnt_d, result_queue_write_pnt_q;
-  logic     [idx_width(ResultQueueDepth)-1:0]   result_queue_read_pnt_d, result_queue_read_pnt_q;
+  logic     [idx_width(ResultQueueDepth)-1:0] result_queue_write_pnt_d, result_queue_write_pnt_q;
+  logic     [idx_width(ResultQueueDepth)-1:0] result_queue_read_pnt_d, result_queue_read_pnt_q;
   // We need to count how many valid elements are there in this result queue.
-  logic     [idx_width(ResultQueueDepth):0]     result_queue_cnt_d, result_queue_cnt_q;
+  logic     [idx_width(ResultQueueDepth):0]   result_queue_cnt_d, result_queue_cnt_q;
   // Vector to register the final grants from the operand requesters, which indicate
   // that the result was actually written in the VRF (while the normal grant just says
   // that the result was accepted by the operand requester stage
-  logic     [NrLanes-1:0]                       result_final_gnt_d, result_final_gnt_q;
+  logic                                       result_final_gnt_d, result_final_gnt_q;
 
   // Is the result queue full?
   logic result_queue_full;
@@ -160,16 +173,16 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
   //  Spill-reg from the lanes  //
   ////////////////////////////////
 
-  elen_t [NrLanes-1:0] sldu_operand;
-  logic  [NrLanes-1:0] sldu_operand_valid;
-  logic  [NrLanes-1:0] sldu_operand_ready;
-  target_fu_e [NrLanes-1:0] sldu_operand_target_fu_d, sldu_operand_target_fu_q;
+  elen_t      sldu_operand;
+  logic       sldu_operand_valid;
+  logic       sldu_operand_ready;
+  target_fu_e sldu_operand_target_fu_d, sldu_operand_target_fu_q;
 
   // Don't handshake if the operands target the addrgen!
   // Moreover, when computing NP2 slides, loop over the same data!
-  elen_t [NrLanes-1:0] sldu_operand_d;
-  logic [NrLanes-1:0]  sldu_operand_valid_d;
-  logic [NrLanes-1:0]  sldu_operand_ready_q;
+  elen_t sldu_operand_d;
+  logic  sldu_operand_valid_d;
+  logic  sldu_operand_ready_q;
 
   typedef enum logic {
     NP2_BUFFER_PNT,
@@ -185,36 +198,34 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
   logic slide_np2_buf_valid_d, slide_np2_buf_valid_q;
 
 
-  for (genvar l = 0; l < NrLanes; l++) begin
-    spill_register #(
-      .T(elen_t)
-    ) i_sldu_spill_register (
-      .clk_i  (clk_i                      ),
-      .rst_ni (rst_ni                     ),
-      .valid_i(sldu_operand_valid_d[l]    ),
-      .ready_o(sldu_operand_ready_q[l]    ),
-      .data_i (sldu_operand_d[l]          ),
-      .valid_o(sldu_operand_valid[l]      ),
-      .ready_i(sldu_operand_ready[l]      ),
-      .data_o (sldu_operand[l]            )
-    );
+  spill_register #(
+    .T(elen_t)
+  ) i_sldu_spill_register (
+    .clk_i  (clk_i                   ),
+    .rst_ni (rst_ni                  ),
+    .valid_i(sldu_operand_valid_d    ),
+    .ready_o(sldu_operand_ready_q    ),
+    .data_i (sldu_operand_d          ),
+    .valid_o(sldu_operand_valid      ),
+    .ready_i(sldu_operand_ready      ),
+    .data_o (sldu_operand            )
+  );
 
-    assign sldu_operand_d[l] = np2_loop_mux_sel_q == NP2_EXT_SEL
-                             ? sldu_operand_i[l]
-                             : result_queue_q[NP2_BUFFER_PNT][l].wdata;
+  assign sldu_operand_d = np2_loop_mux_sel_q == NP2_EXT_SEL
+                         ? sldu_operand_i
+                         : result_queue_q[NP2_BUFFER_PNT].wdata;
 
-    assign sldu_operand_valid_d[l] = (sldu_operand_target_fu_q[l] == ALU_SLDU)
-                                   ? (np2_loop_mux_sel_q == NP2_EXT_SEL
-                                     ? sldu_operand_valid_i[l]
-                                     : slide_np2_buf_valid_q)
-                                   : 1'b0;
+  assign sldu_operand_valid_d = (sldu_operand_target_fu_q == ALU_SLDU)
+                               ? (np2_loop_mux_sel_q == NP2_EXT_SEL
+                                 ? sldu_operand_valid_i
+                                 : slide_np2_buf_valid_q)
+                               : 1'b0;
 
-    assign sldu_operand_ready_o[l] = (sldu_operand_target_fu_q[l] == ALU_SLDU)
-                                   ? (np2_loop_mux_sel_q == NP2_EXT_SEL
-                                     ? sldu_operand_ready_q[l]
-                                     : 1'b0)
-                                   : 1'b0;
-  end
+  assign sldu_operand_ready_o = (sldu_operand_target_fu_q == ALU_SLDU)
+                               ? (np2_loop_mux_sel_q == NP2_EXT_SEL
+                                 ? sldu_operand_ready_q
+                                 : 1'b0)
+                               : 1'b0;
 
   assign sldu_operand_target_fu_d = sldu_operand_target_fu_i;
 
@@ -229,31 +240,29 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
   //  Cut from the masku  //
   //////////////////////////
 
-  strb_t [NrLanes-1:0] mask_q;
-  logic  [NrLanes-1:0] mask_valid_d, mask_valid_q;
-  logic                mask_ready_d;
-  logic  [NrLanes-1:0] mask_ready_q;
+  strb_t mask_q;
+  logic  mask_valid_d, mask_valid_q;
+  logic  mask_ready_d;
+  logic  mask_ready_q;
 
-  for (genvar l = 0; l < NrLanes; l++) begin
-    stream_register #(
-      .T(strb_t)
-    ) i_mask_operand_register (
-      .clk_i     (clk_i           ),
-      .rst_ni    (rst_ni          ),
-      .clr_i     (1'b0            ),
-      .testmode_i(1'b0            ),
-      .data_o    (mask_q[l]       ),
-      .valid_o   (mask_valid_q[l] ),
-      .ready_i   (mask_ready_d    ),
-      .data_i    (mask_i[l]       ),
-      .valid_i   (mask_valid_d[l] ),
-      .ready_o   (mask_ready_q[l] )
-    );
+  stream_register #(
+    .T(strb_t)
+  ) i_mask_operand_register (
+    .clk_i     (clk_i        ),
+    .rst_ni    (rst_ni       ),
+    .clr_i     (1'b0         ),
+    .testmode_i(1'b0         ),
+    .data_o    (mask_q       ),
+    .valid_o   (mask_valid_q ),
+    .ready_i   (mask_ready_d ),
+    .data_i    (mask_i       ),
+    .valid_i   (mask_valid_d ),
+    .ready_o   (mask_ready_q )
+  );
 
-    // Sample only SLDU mask valid
-    assign mask_valid_d[l] = mask_valid_i[l] & ~vinsn_issue_q.vm & vinsn_issue_valid_q;
-  end
-
+  // Sample only SLDU mask valid
+  assign mask_valid_d = mask_valid_i & ~vinsn_issue_q.vm & vinsn_issue_valid_q;
+  
 
   // Don't upset the masku with a spurious ready
   assign mask_ready_o = mask_ready_q[0] & mask_valid_i[0] & ~vinsn_issue_q.vm & vinsn_issue_valid_q & !(vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu});
@@ -344,6 +353,150 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     .dir_i    (sld_dir    ),
     .op_o     (sld_op_dst )
   );
+
+
+  ///////////////////
+  //  Slide queue  //
+  ///////////////////
+
+  localparam int unsigned SlideQueueDepth = 2;
+
+  // Slide queue
+  elen_t [SlideQueueDepth-1:0]            slide_queue_d, slide_queue_q;
+  logic  [SlideQueueDepth-1:0]            slide_queue_valid_d, slide_queue_valid_q;
+  logic  [SlideQueueDepth-1:0]            slide_queue_ready_d, slide_queue_ready_q;
+  // We need two pointers in the slide queue. One pointer to
+  // indicate which `elen_t` we are currently writing into (write_pnt),
+  // and one pointer to indicate which `elen_t` we are currently
+  // reading from and writing into the next (prev) slide queue (read_pnt).
+  logic  [idx_width(SlideQueueDepth)-1:0] slide_queue_write_pnt_d, slide_queue_write_pnt_q;
+  logic  [idx_width(SlideQueueDepth)-1:0] slide_queue_read_pnt_d, slide_queue_read_pnt_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin: p_result_queue_ff
+    if (!rst_ni) begin
+      slide_queue_q           <= '0;
+      slide_queue_valid_q     <= '0;
+      slide_queue_write_pnt_q <= '0;
+      slide_queue_read_pnt_q  <= '0;
+    end else begin
+      slide_queue_q           <= slide_queue_d;
+      slide_queue_valid_q     <= slide_queue_valid_d;
+      slide_queue_write_pnt_q <= slide_queue_write_pnt_d;
+      slide_queue_read_pnt_q  <= slide_queue_read_pnt_d;
+    end
+  end
+
+
+  //////////////////////
+  //  Slide register  //
+  //////////////////////
+
+  typedef enum logic [1:0] {
+    SLIDE_IDLE,
+    SLIDE_RUN,
+    SLIDE_LAST
+  } slide_reg_state_e;
+  slide_reg_state_e slide_state_d, slide_state_q
+
+  //Max Slide: NrLanes/2, Min Slide: 0
+  logic [idx_width(NrLanes):0] amt, slide_cnt_d, slide_cnt_q;
+  // 0: to prev, 1: to next
+  logic dir;
+  logic slide_op_valid;
+  elen_t slide_op, slide_fin;
+
+  always_comb begin slide
+    // Maintain state
+    slide_queue_d = slide_queue_q;
+    slide_state_d = slide_state_q;
+    slide_cnt_d   = slide_cnt_q;
+    slide_queue_read_pnt_q = slide_queue_read_pnt_q;
+    slide_write_read_pnt_q = slide_write_read_pnt_q;
+    slide_queue_valid_d = slide_queue_valid_q;
+    slide_queue_ready_d = slide_queue_ready_q;
+
+    amt = vinsn_issue_q.stride[idx_width(NrLanes):0] == NrLanes/2 ? amt = NrLanes/2 :
+                                                        vinsn_issue_q.stride[idx_width(NrLanes)-1:0];
+    dir = vinsn_issue_q.op == VSLIDEDOWN ? vinsn_issue_q.stride[idx_width(NrLanes)] :
+                              vinsn_issue_q.stride[idx_width(NrLanes)] ^ 1'b1;
+    slide_op_valid = sldu_operand_target_fu_i == ALU_SLDU ? sldu_operand_valid_i : 1'b0;
+    slide_op = sldu_operand_i;
+
+    // Outputs
+    sldu_prev_data_o  = slide_queue_q[slide_queue_read_pnt_q];
+    sldu_next_data_o  = slide_queue_q[slide_queue_read_pnt_q];
+    sldu_next_valid_o = slide_queue_valid_q;
+    sldu_prev_valid_o = slide_queue_valid_q;
+    sldu_next_ready_o = slide_queue_ready_q;
+    sldu_prev_ready_o = slide_queue_ready_q;
+
+    unique case(slide_state_q)
+      SLIDE_IDLE: begin
+        if (slide_op_valid) begin
+          if (amt == 0) begin // all slides with amt=0 should be handled by this
+            slide_fin = slide_op;
+          end else begin      // TODO: lookahed handshake -> direct slide without waiting 1 cycle
+            slide_cnt_d = '0;
+            slide_queue_d[slide_queue_write_pnt_q] = slide_op;
+            slide_queue_write_pnt_d += 1;
+
+            slide_state_d = (amt == 1) ? SLIDE_LAST : SLIDE_RUN;
+          end
+        end
+      end
+      SLIDE_RUN: begin
+        // Slide to next lane
+        if(dir)begin
+          if(sldu_next_ready_i) begin
+            slide_queue_read_pnt_d += 1;
+          end
+          if(sldu_prev_valid_i) begin
+            slide_queue_d[slide_queue_write_pnt_q] = sldu_prev_data_i;
+            slide_queue_write_pnt_d += 1;
+            slide_cnt_d += 1;
+            if (slide_cnt_q + 2 == amt) begin
+              slide_state_d = SLIDE_LAST;
+            end
+          end
+        // Slide to prev lane
+        end else begin
+          if(sldu_prev_ready_i) begin
+            slide_queue_read_pnt_d += 1;
+          end
+          if(sldu_next_valid_i) begin
+            slide_queue_d[slide_queue_write_pnt_q] = sldu_next_data_i;
+            slide_queue_write_pnt_d += 1;
+            slide_cnt_d += 1;
+            if (slide_cnt_q + 2 == amt) begin
+              slide_state_d = SLIDE_LAST;
+            end
+          end
+        end
+      end
+      SLIDE_LAST: begin
+        // Slide from prev lane and finish
+        if(dir)begin
+          if(sldu_prev_valid_i) begin
+            slide_fin = sldu_prev_data_i;
+            slide_queue_write_pnt_d += 1;
+          end
+        // Slide from next lane and finish
+        end else begin
+          if(sldu_next_valid_i) begin
+            slide_fin = sldu_next_data_i;
+            slide_queue_write_pnt_d += 1;
+          end
+        end
+        if (slide_op_valid) begin
+          slide_cnt_d = '0;
+          slide_queue_d[slide_queue_write_pnt_q] = slide_op;
+          slide_queue_write_pnt_d += 1;
+
+          slide_state_d = (amt == 1) ? SLIDE_LAST : SLIDE_RUN;
+        end
+      end
+    endcase
+  end
 
   //////////////////
   //  Slide unit  //
@@ -781,32 +934,30 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     //  Write results into the VRF  //
     //////////////////////////////////
 
-    for (int lane = 0; lane < NrLanes; lane++) begin: result_write
-      sldu_result_req_o[lane]   = result_queue_valid_q[result_queue_read_pnt_q][lane] & (~(vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu}));
-      sldu_red_valid_o[lane]    = result_queue_valid_q[result_queue_read_pnt_q][lane] & (vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu});
-      sldu_result_addr_o[lane]  = result_queue_q[result_queue_read_pnt_q][lane].addr;
-      sldu_result_id_o[lane]    = result_queue_q[result_queue_read_pnt_q][lane].id;
-      sldu_result_wdata_o[lane] = result_queue_q[result_queue_read_pnt_q][lane].wdata;
-      sldu_result_be_o[lane]    = result_queue_q[result_queue_read_pnt_q][lane].be;
+    sldu_result_req_o   = result_queue_valid_q[result_queue_read_pnt_q] & (~(vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu}));
+    sldu_red_valid_o    = result_queue_valid_q[result_queue_read_pnt_q] & (vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu});
+    sldu_result_addr_o  = result_queue_q[result_queue_read_pnt_q].addr;
+    sldu_result_id_o    = result_queue_q[result_queue_read_pnt_q].id;
+    sldu_result_wdata_o = result_queue_q[result_queue_read_pnt_q].wdata;
+    sldu_result_be_o    = result_queue_q[result_queue_read_pnt_q].be;
 
-      // Update the final gnt vector
-      result_final_gnt_d[lane] |= sldu_result_final_gnt_i[lane];
+    // Update the final gnt vector
+    result_final_gnt_d |= sldu_result_final_gnt_i;
 
-      // Received a grant from the VRF (slide) or from the FUs (reduction).
-      // Deactivate the request, but do not bump the pointers for now.
-      if (((vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu} && sldu_red_valid_o[lane]) || sldu_result_req_o[lane]) && sldu_result_gnt_i[lane]) begin
-        result_queue_valid_d[result_queue_read_pnt_q][lane] = 1'b0;
-        result_queue_d[result_queue_read_pnt_q][lane]       = '0;
-        // Reset the final gnt vector since we are now waiting for another final gnt
-        result_final_gnt_d[lane] = 1'b0;
-      end
-    end: result_write
-
+    // Received a grant from the VRF (slide) or from the FUs (reduction).
+    // Deactivate the request, but do not bump the pointers for now.
+    if (((vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu} && sldu_red_valid_o) || sldu_result_req_o) && sldu_result_gnt_i) begin
+      result_queue_valid_d[result_queue_read_pnt_q] = 1'b0;
+      result_queue_d[result_queue_read_pnt_q]       = '0;
+      // Reset the final gnt vector since we are now waiting for another final gnt
+      result_final_gnt_d = 1'b0;
+    end
+    
     // All lanes accepted the VRF request
     // If this was the last request, wait for all the final grants!
     // If this is a reduction, no need for the final grants
     if (!(|result_queue_valid_d[result_queue_read_pnt_q]) &&
-      (vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu} || (&result_final_gnt_d || commit_cnt_q > (NrLanes * 8))))
+      (vinsn_commit.vfu inside {VFU_Alu, VFU_MFpu} || (&result_final_gnt_d || commit_cnt_q > 8)))
       // There is something waiting to be written
       if (!result_queue_empty) begin
         if (state_q != SLIDE_NP2_SETUP)
@@ -820,8 +971,8 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
         result_queue_cnt_d -= 1;
 
         // Decrement the counter of remaining vector elements waiting to be written
-        commit_cnt_d = commit_cnt_q - NrLanes * 8;
-        if (commit_cnt_q < (NrLanes * 8))
+        commit_cnt_d = commit_cnt_q - 8;
+        if (commit_cnt_q < 8)
           commit_cnt_d = '0;
       end
 

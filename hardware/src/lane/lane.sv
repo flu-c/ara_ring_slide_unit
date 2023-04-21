@@ -58,18 +58,16 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     output elen_t                                          sldu_addrgen_operand_o,
     output target_fu_e                                     sldu_addrgen_operand_target_fu_o,
     output logic                                           sldu_addrgen_operand_valid_o,
-    input  logic                                           sldu_operand_ready_i,
-    input  sldu_mux_e                                      sldu_mux_sel_i,
     input  logic                                           addrgen_operand_ready_i,
-    // Interface with the Slide unit
-    input  logic                                           sldu_result_req_i,
-    input  vid_t                                           sldu_result_id_i,
-    input  vaddr_t                                         sldu_result_addr_i,
-    input  elen_t                                          sldu_result_wdata_i,
-    input  strb_t                                          sldu_result_be_i,
-    output logic                                           sldu_result_gnt_o,
-    input  logic                                           sldu_red_valid_i,
-    output logic                                           sldu_result_final_gnt_o,
+    // Interface with other Slide units
+    input  logic                                           sldu_prev_valid_i,
+    input  logic                                           sldu_next_valid_i,
+    input  elen_t                                          sldu_prev_data_i,
+    input  elen_t                                          sldu_next_data_i,
+    output logic                                           sldu_prev_ready_o,
+    output logic                                           sldu_next_ready_o,
+    output elen_t                                          sldu_prev_data_o,
+    output elen_t                                          sldu_next_data_o,
     // Interface with the Load unit
     input  logic                                           ldu_result_req_i,
     input  vid_t                                           ldu_result_id_i,
@@ -190,6 +188,12 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
   logic                                       mfpu_result_gnt;
   // To the slide unit (reductions)
   logic                                       sldu_result_gnt_opqueues;
+  logic                                       sldu_result_req;
+  vid_t                                       sldu_result_id;
+  vaddr_t                                     sldu_result_addr;
+  elen_t                                      sldu_result_wdata;
+  strb_t                                      sldu_result_be;
+  logic                                       sldu_result_final_gnt;
 
   operand_requester #(
     .NrBanks(NrVRFBanksPerLane),
@@ -240,13 +244,13 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     .masku_result_gnt_o       (masku_result_gnt_o      ),
     .masku_result_final_gnt_o (masku_result_final_gnt_o),
     // Slide Unit
-    .sldu_result_req_i        (sldu_result_req_i       ),
-    .sldu_result_id_i         (sldu_result_id_i        ),
-    .sldu_result_addr_i       (sldu_result_addr_i      ),
-    .sldu_result_wdata_i      (sldu_result_wdata_i     ),
-    .sldu_result_be_i         (sldu_result_be_i        ),
+    .sldu_result_req_i        (sldu_result_req         ),
+    .sldu_result_id_i         (sldu_result_id          ),
+    .sldu_result_addr_i       (sldu_result_addr        ),
+    .sldu_result_wdata_i      (sldu_result_wdata       ),
+    .sldu_result_be_i         (sldu_result_be          ),
     .sldu_result_gnt_o        (sldu_result_gnt_opqueues),
-    .sldu_result_final_gnt_o  (sldu_result_final_gnt_o ),
+    .sldu_result_final_gnt_o  (sldu_result_final_gnt   ),
     // Load Unit
     .ldu_result_req_i         (ldu_result_req_i        ),
     .ldu_result_id_i          (ldu_result_id_i         ),
@@ -299,6 +303,7 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
   logic  [2:0] mfpu_operand_ready;
 
   elen_t sldu_addrgen_operand_opqueues;
+  target_fu_e sldu_addrgen_operand_target_fu_o;
 
   logic sldu_operand_opqueues_ready;
   logic sldu_addrgen_operand_opqueues_valid;
@@ -353,6 +358,8 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
   logic sldu_alu_req_valid_o, sldu_mfpu_req_valid_o;
   logic sldu_alu_ready, sldu_mfpu_ready;
 
+  logic mask_ready_vfu;
+
   vector_fus_stage #(
     .NrLanes     (NrLanes     ),
     .FPUSupport  (FPUSupport  ),
@@ -400,7 +407,7 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     .sldu_mfpu_valid_i    (sldu_mfpu_valid                        ),
     .sldu_mfpu_ready_o    (sldu_mfpu_ready                        ),
     .sldu_mfpu_gnt_i      (sldu_mfpu_gnt                          ),
-    .sldu_operand_i       (sldu_result_wdata_i                    ),
+    .sldu_operand_i       (sldu_result_wdata                      ),
     // Interface with the operand queues
     // ALU
     .alu_operand_i        (alu_operand                            ),
@@ -416,8 +423,60 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     .mask_operand_ready_i (mask_operand_ready_i[2 +: NrMaskFUnits]),
     .mask_i               (mask                                   ),
     .mask_valid_i         (mask_valid                             ),
-    .mask_ready_o         (mask_ready                             )
+    .mask_ready_o         (mask_ready_vfu                         )
   );
+
+  //////////////////
+  //  Slide unit  //
+  //////////////////
+
+   logic sldu_operand_ready;
+   sldu_mux_e sldu_mux_sel;
+   logic sldu_red_valid;
+   logic sldu_result_gnt;
+   logic mask_ready_sldu
+
+   sldu #(
+    .NrLanes(NrLanes),
+    .vaddr_t(vaddr_t)
+  ) i_sldu (
+    .clk_i                    (clk_i                           ),
+    .rst_ni                   (rst_ni                          ),
+    // Interface with the main sequencer
+    .pe_req_i                 (pe_req_i                        ),
+    .pe_req_valid_i           (pe_req_valid_i                  ),
+    .pe_vinsn_running_i       (pe_vinsn_running_i              ),
+    .pe_req_ready_o           (pe_req_ready_o                  ),
+    .pe_resp_o                (pe_resp_o                       ),
+    // Interface with lane
+    .sldu_operand_i           (sldu_addrgen_operand_o          ),
+    .sldu_operand_target_fu_i (sldu_addrgen_operand_target_fu_o),
+    .sldu_operand_valid_i     (sldu_addrgen_operand_valid_o    ),
+    .sldu_operand_ready_o     (sldu_operand_ready              ),
+    .sldu_result_req_o        (sldu_result_req                 ),
+    .sldu_result_id_o         (sldu_result_id                  ),
+    .sldu_result_addr_o       (sldu_result_addr                ),
+    .sldu_result_wdata_o      (sldu_result_wdata               ),
+    .sldu_result_be_o         (sldu_result_be                  ),
+    .sldu_result_gnt_i        (sldu_result_gnt                 ),
+    .sldu_result_final_gnt_i  (sldu_result_final_gnt           ),
+    // Interface with sldu's
+    .sldu_prev_valid_i        (sldu_prev_valid_i               ),
+    .sldu_next_valid_i        (sldu_next_valid_i               ),
+    .sldu_prev_data_i         (sldu_prev_data_i                ),
+    .sldu_next_data_i         (sldu_next_data_i                ),
+    .sldu_prev_ready_o        (sldu_prev_ready_o               ),
+    .sldu_next_ready_o        (sldu_next_ready_o               ),
+    .sldu_prev_data_o         (sldu_prev_data_o                ),
+    .sldu_next_data_o         (sldu_next_data_o                ),
+    // Support for reductions
+    .sldu_mux_sel_o           (sldu_mux_sel                    ),
+    .sldu_red_valid_o         (sldu_red_valid                  ),
+    // Interface with the Mask Unit
+    .mask_i                   (mask_i                          ),
+    .mask_valid_i             (mask_valid                      ),
+    .mask_ready_o             (mask_ready_sldu                 )
+    );
 
   /********************
    *  Slide Unit MUX  *
@@ -430,7 +489,7 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     if (!rst_ni) begin
       sldu_mux_sel_q <= NO_RED;
     end else begin
-      sldu_mux_sel_q <= sldu_mux_sel_i;
+      sldu_mux_sel_q <= sldu_mux_sel;
     end
   end
 
@@ -440,14 +499,16 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
                                        (sldu_mux_sel_q == ALU_RED ? alu_result_wdata : mfpu_result_wdata);
   assign sldu_addrgen_operand_valid_o = sldu_mux_sel_q == NO_RED ? sldu_addrgen_operand_opqueues_valid :
                                        (sldu_mux_sel_q == ALU_RED ? sldu_alu_req_valid_o : sldu_mfpu_req_valid_o);
-  assign sldu_operand_opqueues_ready  = sldu_operand_ready_i & (sldu_mux_sel_q == NO_RED);
-  assign sldu_alu_gnt                 = sldu_operand_ready_i & (sldu_mux_sel_q == ALU_RED);
-  assign sldu_mfpu_gnt                = sldu_operand_ready_i & (sldu_mux_sel_q == MFPU_RED);
+  assign sldu_operand_opqueues_ready  = sldu_operand_ready & (sldu_mux_sel_q == NO_RED);
+  assign sldu_alu_gnt                 = sldu_operand_ready & (sldu_mux_sel_q == ALU_RED);
+  assign sldu_mfpu_gnt                = sldu_operand_ready & (sldu_mux_sel_q == MFPU_RED);
 
-  assign sldu_alu_valid    = sldu_red_valid_i & (sldu_mux_sel_q == ALU_RED);
-  assign sldu_mfpu_valid   = sldu_red_valid_i & (sldu_mux_sel_q == MFPU_RED);
-  assign sldu_result_gnt_o = sldu_mux_sel_q == NO_RED ? sldu_result_gnt_opqueues :
+  assign sldu_alu_valid  = sldu_red_valid & (sldu_mux_sel_q == ALU_RED);
+  assign sldu_mfpu_valid = sldu_red_valid & (sldu_mux_sel_q == MFPU_RED);
+  assign sldu_result_gnt = sldu_mux_sel_q == NO_RED ? sldu_result_gnt_opqueues :
                             (sldu_mux_sel_q == ALU_RED ? sldu_alu_ready : sldu_mfpu_ready);
+
+  assign mask_ready = mask_ready_vfu || mask_ready_sldu;
 
   //////////////////
   //  Assertions  //
