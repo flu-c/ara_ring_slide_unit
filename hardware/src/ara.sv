@@ -204,11 +204,11 @@ module ara import ara_pkg::*; #(
   target_fu_e[NrLanes-1:0]                     sldu_addrgen_operand_target_fu;
   logic      [NrLanes-1:0]                     sldu_addrgen_operand_valid;
   logic                                        addrgen_operand_ready;
-  // Slide Units
-  logic      [NrLanes-1:0]                     sldu_prev_valid_i;
-  logic      [NrLanes-1:0]                     sldu_next_valid_o;
-  logic      [NrLanes-1:0]                     sldu_prev_valid_i;
-  logic      [NrLanes-1:0]                     sldu_next_valid_o;
+  // Slide Units (prev/next is from the output p.o.v.)
+  logic      [NrLanes-1:0]                     sldu_prev_valid;
+  logic      [NrLanes-1:0]                     sldu_next_valid;
+  logic      [NrLanes-1:0]                     sldu_prev_ready;
+  logic      [NrLanes-1:0]                     sldu_next_ready;
   elen_t     [NrLanes-1:0]                     sldu_prev_data;
   elen_t     [NrLanes-1:0]                     sldu_next_data;
 
@@ -275,12 +275,16 @@ module ara import ara_pkg::*; #(
       .sldu_addrgen_operand_valid_o    (sldu_addrgen_operand_valid[lane]    ),
       .addrgen_operand_ready_i         (addrgen_operand_ready               ),
       // Interface with other Slide units
-      .sldu_prev_valid_i               (sldu_prev_valid_i                   ),
-      .sldu_next_valid_i               (sldu_next_valid_i                   ),
+      .sldu_prev_valid_i               (sldu_next_valid_i[lane]             ),
+      .sldu_next_valid_i               (sldu_prev_valid_i[lane]             ),
+      .sldu_prev_ready_i               (sldu_next_ready_i[lane]             ),
+      .sldu_next_ready_i               (sldu_prev_ready_i[lane]             ),
       .sldu_prev_data_i                (sldu_next_data[lane]                ),
       .sldu_next_data_i                (sldu_prev_data[lane]                ),
-      .sldu_prev_ready_o               (sldu_prev_ready_o                   ),
-      .sldu_next_ready_o               (sldu_next_ready_o                   ),
+      .sldu_prev_valid_o               (sldu_prev_valid_o[lane-1]           ),
+      .sldu_next_valid_o               (sldu_next_valid_o[lane+1]           ),
+      .sldu_prev_ready_o               (sldu_prev_ready_o[lane-1]           ),
+      .sldu_next_ready_o               (sldu_next_ready_o[lane+1]           ),
       .sldu_prev_data_o                (sldu_prev_data[lane-1]              ),
       .sldu_next_data_o                (sldu_next_data[lane+1]              ),
       // Interface with the mask unit
