@@ -27,8 +27,8 @@ module ara import ara_pkg::*; #(
     parameter  type                   axi_resp_t   = logic,
     // Dependant parameters. DO NOT CHANGE!
     // Ara has NrLanes + 3 processing elements: each one of the lanes, the vector load unit, the
-    // vector store unit, the slide unit, and the mask unit.
-    localparam int           unsigned NrPEs        = NrLanes + 4
+    // vector store unit and the mask unit.
+    localparam int           unsigned NrPEs        = NrLanes + 3
   ) (
     // Clock and Reset
     input  logic              clk_i,
@@ -231,6 +231,10 @@ module ara import ara_pkg::*; #(
   logic      [NrLanes-1:0]                     masku_result_final_gnt;
 
   for (genvar lane = 0; lane < NrLanes; lane++) begin: gen_lanes
+
+    localparam int unsigned idx_a = lane == 0 ? NrLanes - 1 : lane - 1;
+    localparam int unsigned idx_b = lane == NrLanes - 1 ? 0 : lane + 1;
+
     lane #(
       .NrLanes     (NrLanes     ),
       .FPUSupport  (FPUSupport  ),
@@ -275,18 +279,19 @@ module ara import ara_pkg::*; #(
       .sldu_addrgen_operand_valid_o    (sldu_addrgen_operand_valid[lane]    ),
       .addrgen_operand_ready_i         (addrgen_operand_ready               ),
       // Interface with other Slide units
-      .sldu_prev_valid_i               (sldu_next_valid_i[lane]             ),
-      .sldu_next_valid_i               (sldu_prev_valid_i[lane]             ),
-      .sldu_prev_ready_i               (sldu_next_ready_i[lane]             ),
-      .sldu_next_ready_i               (sldu_prev_ready_i[lane]             ),
+      .sldu_prev_valid_i               (sldu_next_valid[lane]               ),
+      .sldu_next_valid_i               (sldu_prev_valid[lane]               ),
+      .sldu_prev_ready_i               (sldu_next_ready[lane]               ),
+      .sldu_next_ready_i               (sldu_prev_ready[lane]               ),
       .sldu_prev_data_i                (sldu_next_data[lane]                ),
       .sldu_next_data_i                (sldu_prev_data[lane]                ),
-      .sldu_prev_valid_o               (sldu_prev_valid_o[lane-1]           ),
-      .sldu_next_valid_o               (sldu_next_valid_o[lane+1]           ),
-      .sldu_prev_ready_o               (sldu_prev_ready_o[lane-1]           ),
-      .sldu_next_ready_o               (sldu_next_ready_o[lane+1]           ),
-      .sldu_prev_data_o                (sldu_prev_data[lane-1]              ),
-      .sldu_next_data_o                (sldu_next_data[lane+1]              ),
+
+      .sldu_prev_valid_o               (sldu_prev_valid[idx_a]              ),
+      .sldu_next_valid_o               (sldu_next_valid[idx_b]              ),
+      .sldu_prev_ready_o               (sldu_prev_ready[idx_a]              ),
+      .sldu_next_ready_o               (sldu_next_ready[idx_b]              ),
+      .sldu_prev_data_o                (sldu_prev_data[idx_a]               ),
+      .sldu_next_data_o                (sldu_next_data[idx_b]               ),
       // Interface with the mask unit
       .mask_operand_o                  (masku_operand[lane]                 ),
       .mask_operand_valid_o            (masku_operand_valid[lane]           ),
@@ -303,7 +308,6 @@ module ara import ara_pkg::*; #(
       .mask_ready_o                    (lane_mask_ready[lane]               )
     );
   end: gen_lanes
-
 
   //////////////////////////////
   //  Vector Load/Store Unit  //
