@@ -211,6 +211,12 @@ module ara import ara_pkg::*; #(
   logic      [NrLanes-1:0]                     sldu_next_ready;
   elen_t     [NrLanes-1:0]                     sldu_prev_data;
   elen_t     [NrLanes-1:0]                     sldu_next_data;
+  logic      [NrLanes-1:0]                     sldu_sync_fin_o;
+  logic      [NrLanes-1:0]                     sldu_sync_start_o;
+  logic      [NrLanes-1:0]                     sldu_sync_d;
+  logic      [NrLanes-1:0]                     sldu_sync_q;
+  logic      [NrLanes-1:0]                     sldu_sync_fin_d;
+  logic      [NrLanes-1:0]                     sldu_sync_fin_q;
 
   // Results
   // Load Unit
@@ -292,6 +298,10 @@ module ara import ara_pkg::*; #(
       .sldu_next_ready_o               (sldu_next_ready[idx_b]              ),
       .sldu_prev_data_o                (sldu_prev_data[idx_a]               ),
       .sldu_next_data_o                (sldu_next_data[idx_b]               ),
+
+      .sldu_sync_i                     (sldu_sync_q[lane]                   ),
+      .sldu_sync_start_o               (sldu_sync_start_o[lane]             ),
+      .sldu_sync_fin_o                 (sldu_sync_fin_o[lane]               ),
       // Interface with the mask unit
       .mask_operand_o                  (masku_operand[lane]                 ),
       .mask_operand_valid_o            (masku_operand_valid[lane]           ),
@@ -305,9 +315,30 @@ module ara import ara_pkg::*; #(
       .masku_result_final_gnt_o        (masku_result_final_gnt[lane]        ),
       .mask_i                          (mask[lane]                          ),
       .mask_valid_i                    (mask_valid[lane] & mask_valid_lane  ),
+      // .mask_valid_i                    (mask_valid[lane]                    ),
+      // .mask_valid_lane_i               (mask_valid_lane                     ),
       .mask_ready_o                    (lane_mask_ready[lane]               )
     );
   end: gen_lanes
+
+  always_comb begin
+    sldu_sync_d = sldu_sync_q | sldu_sync_start_o;
+    sldu_sync_fin_d = sldu_sync_fin_q | sldu_sync_fin_o;
+    if (&sldu_sync_fin_q) begin
+      sldu_sync_d = '0;
+      sldu_sync_fin_d = '0;
+    end
+  end
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      sldu_sync_q     <= '0;
+      sldu_sync_fin_q <= '0;
+    end else begin
+      sldu_sync_q     <= sldu_sync_d;
+      sldu_sync_fin_q <= sldu_sync_fin_d;
+    end
+  end
 
   //////////////////////////////
   //  Vector Load/Store Unit  //
