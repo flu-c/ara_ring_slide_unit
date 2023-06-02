@@ -33,7 +33,8 @@ module lane_sequencer import ara_pkg::*; import rvv_pkg::*; import cf_math_pkg::
     input  logic                                          alu_ready_i,
     input  logic                 [NrVInsn-1:0]            alu_vinsn_done_i,
     input  logic                                          mfpu_ready_i,
-    input  logic                 [NrVInsn-1:0]            mfpu_vinsn_done_i
+    input  logic                 [NrVInsn-1:0]            mfpu_vinsn_done_i,
+    input  logic                 [NrVInsn-1:0]            sldu_vinsn_done_i
   );
 
   ////////////////////////////
@@ -183,7 +184,7 @@ module lane_sequencer import ara_pkg::*; import rvv_pkg::*; import cf_math_pkg::
     pe_req_ready = 1'b1;
 
     // Loops that finished execution
-    vinsn_done_d         = alu_vinsn_done_i | mfpu_vinsn_done_i;
+    vinsn_done_d         = alu_vinsn_done_i | mfpu_vinsn_done_i | sldu_vinsn_done_i;
     alu_vinsn_done_d     = |alu_vinsn_done_i;
     mfpu_vinsn_done_d    = |mfpu_vinsn_done_i;
     pe_resp_o.vinsn_done = vinsn_done_q;
