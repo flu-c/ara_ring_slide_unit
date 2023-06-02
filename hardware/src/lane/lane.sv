@@ -72,6 +72,9 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     output logic                                           sldu_next_ready_o,
     output elen_t                                          sldu_prev_data_o,
     output elen_t                                          sldu_next_data_o,
+    input  logic                                           sldu_sync_i,
+    output logic                                           sldu_sync_start_o,
+    output logic                                           sldu_sync_fin_o,
     // Interface with the Load unit
     input  logic                                           ldu_result_req_i,
     input  vid_t                                           ldu_result_id_i,
@@ -94,6 +97,7 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     // Interface between the Mask unit and the VFUs
     input  strb_t                                          mask_i,
     input  logic                                           mask_valid_i,
+    // input  logic                                           mask_valid_lane_i,
     output logic                                           mask_ready_o
   );
 
@@ -133,6 +137,7 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
   logic                 [NrVInsn-1:0]         alu_vinsn_done;
   logic                                       mfpu_ready;
   logic                 [NrVInsn-1:0]         mfpu_vinsn_done;
+  logic                 [NrVInsn-1:0]         sldu_vinsn_done;
 
   lane_sequencer #(.NrLanes(NrLanes)) i_lane_sequencer (
     .clk_i                  (clk_i                ),
@@ -156,7 +161,8 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     .alu_ready_i            (alu_ready            ),
     .alu_vinsn_done_i       (alu_vinsn_done       ),
     .mfpu_ready_i           (mfpu_ready           ),
-    .mfpu_vinsn_done_i      (mfpu_vinsn_done      )
+    .mfpu_vinsn_done_i      (mfpu_vinsn_done      ),
+    .sldu_vinsn_done_i      (sldu_vinsn_done      )
   );
 
   /////////////////////////
@@ -307,7 +313,6 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
   logic  [2:0] mfpu_operand_ready;
 
   elen_t sldu_addrgen_operand_opqueues;
-  target_fu_e sldu_addrgen_operand_target_fu_o;
 
   logic sldu_operand_opqueues_ready;
   logic sldu_addrgen_operand_opqueues_valid;
@@ -426,7 +431,8 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     .mask_operand_valid_o (mask_operand_valid_o[2 +: NrMaskFUnits]),
     .mask_operand_ready_i (mask_operand_ready_i[2 +: NrMaskFUnits]),
     .mask_i               (mask                                   ),
-    .mask_valid_i         (mask_valid                             ),
+    // .mask_valid_i         (mask_valid_i & mask_valid_lane_i       ),
+    .mask_valid_i         (mask_valid_i                           ),
     .mask_ready_o         (mask_ready_vfu                         )
   );
 
@@ -438,7 +444,7 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
    sldu_mux_e sldu_mux_sel;
    logic sldu_red_valid;
    logic sldu_result_gnt;
-   logic mask_ready_sldu
+   logic mask_ready_sldu;
 
    sldu #(
     .NrLanes(NrLanes),
@@ -446,13 +452,13 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
   ) i_sldu (
     .clk_i                    (clk_i                           ),
     .rst_ni                   (rst_ni                          ),
+    .lane_id_i                (lane_id_i                       ),
     // Interface with the main sequencer
     .pe_req_i                 (pe_req_i                        ),
     .pe_req_valid_i           (pe_req_valid_i                  ),
     .pe_vinsn_running_i       (pe_vinsn_running_i              ),
-    .pe_req_ready_o           (pe_req_ready_o                  ),
-    .pe_resp_o                (pe_resp_o                       ),
     // Interface with lane
+    .sldu_vinsn_done_o        (sldu_vinsn_done                 ),
     .sldu_operand_i           (sldu_addrgen_operand_o          ),
     .sldu_operand_target_fu_i (sldu_addrgen_operand_target_fu_o),
     .sldu_operand_valid_i     (sldu_addrgen_operand_valid_o    ),
@@ -477,6 +483,9 @@ module lane import ara_pkg::*; import rvv_pkg::*; #(
     .sldu_next_ready_o        (sldu_next_ready_o               ),
     .sldu_prev_data_o         (sldu_prev_data_o                ),
     .sldu_next_data_o         (sldu_next_data_o                ),
+    .sldu_sync_i              (sldu_sync_i                     ),
+    .sldu_sync_start_o        (sldu_sync_start_o               ),
+    .sldu_sync_fin_o          (sldu_sync_fin_o                 ),
     // Support for reductions
     .sldu_mux_sel_o           (sldu_mux_sel                    ),
     .sldu_red_valid_o         (sldu_red_valid                  ),
