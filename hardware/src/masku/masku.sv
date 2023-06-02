@@ -959,7 +959,7 @@ module masku import ara_pkg::*; import rvv_pkg::*; #(
     end: send_operand
 
     // Is this operand going to the lanes?
-    mask_valid_lane_o = vinsn_issue.vfu inside {VFU_Alu, VFU_MFpu, VFU_MaskUnit};
+    mask_valid_lane_o = vinsn_issue.vfu inside {VFU_Alu, VFU_MFpu, VFU_MaskUnit, VFU_SlideUnit};
 
     if (vd_scalar(vinsn_issue.op)) begin
       mask_valid_o = (vinsn_issue.vm) ? '0 : '1;
