@@ -48,6 +48,9 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     output logic                              sldu_next_ready_o,
     output elen_t                             sldu_prev_data_o,
     output elen_t                             sldu_next_data_o,
+    input  logic                              sldu_sync_i,
+    output logic                              sldu_sync_start_o,
+    output logic                              sldu_sync_fin_o,
     // Support for reductions
     output sldu_mux_e                         sldu_mux_sel_o,
     output logic                              sldu_red_valid_o,
@@ -119,7 +122,7 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
   //  Result queues  //
   /////////////////////
 
-  localparam int unsigned ResultQueueDepth = 4;
+  localparam int unsigned ResultQueueDepth = 2;
 
   // There is a result queue per lane, holding the results that were not
   // yet accepted by the corresponding lane.
@@ -169,160 +172,22 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     end
   end
 
-  ////////////////////////////////
-  //  Spill-reg from the lanes  //
-  ////////////////////////////////
-
-  // elen_t      sldu_operand;
-  // logic       sldu_operand_valid;
-  // logic       sldu_operand_ready;
-  // target_fu_e sldu_operand_target_fu_d, sldu_operand_target_fu_q;
-
-  // // Don't handshake if the operands target the addrgen!
-  // // Moreover, when computing NP2 slides, loop over the same data!
-  // elen_t sldu_operand_d;
-  // logic  sldu_operand_valid_d;
-  // logic  sldu_operand_ready_q;
-
-  // typedef enum logic {
-  //   NP2_BUFFER_PNT,
-  //   NP2_RESULT_PNT
-  // } np2_result_queue_pnt_e;
-
-  // typedef enum logic {
-  //   NP2_EXT_SEL,
-  //   NP2_LOOP_SEL
-  // } np2_loop_mux_e;
-  // np2_loop_mux_e np2_loop_mux_sel_d, np2_loop_mux_sel_q;
-
-  // logic slide_np2_buf_valid_d, slide_np2_buf_valid_q;
-
-
-  // spill_register #(
-  //   .T(elen_t)
-  // ) i_sldu_spill_register (
-  //   .clk_i  (clk_i                   ),
-  //   .rst_ni (rst_ni                  ),
-  //   .valid_i(sldu_operand_valid_d    ),
-  //   .ready_o(sldu_operand_ready_q    ),
-  //   .data_i (sldu_operand_d          ),
-  //   .valid_o(sldu_operand_valid      ),
-  //   .ready_i(sldu_operand_ready      ),
-  //   .data_o (sldu_operand            )
-  // );
-
-  // assign sldu_operand_d = np2_loop_mux_sel_q == NP2_EXT_SEL
-  //                        ? sldu_operand_i
-  //                        : result_queue_q[NP2_BUFFER_PNT].wdata;
-
-  // assign sldu_operand_valid_d = (sldu_operand_target_fu_q == ALU_SLDU)
-  //                              ? (np2_loop_mux_sel_q == NP2_EXT_SEL
-  //                                ? sldu_operand_valid_i
-  //                                : slide_np2_buf_valid_q)
-  //                              : 1'b0;
-
-  // assign sldu_operand_ready_o = (sldu_operand_target_fu_q == ALU_SLDU)
-  //                              ? (np2_loop_mux_sel_q == NP2_EXT_SEL
-  //                                ? sldu_operand_ready_q
-  //                                : 1'b0)
-  //                              : 1'b0;
-
-  // assign sldu_operand_target_fu_d = sldu_operand_target_fu_i;
-
-  // always_ff @(posedge clk_i or negedge rst_ni) begin
-  //   if (!rst_ni)
-  //     sldu_operand_target_fu_q <= target_fu_e'(1'b0);
-  //   else
-  //     sldu_operand_target_fu_q <= sldu_operand_target_fu_d;
-  // end
-
   //////////////////////////
   //  Cut from the masku  //
   //////////////////////////
 
-  // strb_t mask_new;
-  // logic  mask_valid_d, mask_valid_q;
   logic  mask_ready_d;
   logic  mask_ready_q;
   logic mask_valid;
-
-  // stream_register #(
-  //   .T(strb_t)
-  // ) i_mask_operand_register (
-  //   .clk_i     (clk_i        ),
-  //   .rst_ni    (rst_ni       ),
-  //   .clr_i     (1'b0         ),
-  //   .testmode_i(1'b0         ),
-  //   .data_o    (mask_new     ),
-  //   .valid_o   (mask_valid_q ),
-  //   .ready_i   (mask_ready_d ),
-  //   .data_i    (mask_i       ),
-  //   .valid_i   (mask_valid_d ),
-  //   .ready_o   (mask_ready_q )
-  // );
 
   // Sample only SLDU mask valid
   assign mask_valid = mask_valid_i & ~vinsn_issue_q.vm & vinsn_issue_valid_q;
   
 
   // Don't upset the masku with a spurious ready
-  assign mask_ready_o = mask_ready_q & mask_valid_i & ~vinsn_issue_q.vm & vinsn_issue_valid_q & !(vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu});
-
-  //////////////////
-  //  Mask queue  //
-  //////////////////
-
-  strb_t [3:0] mask_d, mask_q;
-  // First mask at mask_pnt, second mask one after, becomes first mask after write back
-  logic  [1:0] mask_pnt_d, mask_pnt_q;
-  logic  [3:0] mask_queue_valid_d, mask_queue_valid_q;
-
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if(~rst_ni) begin
-      mask_q             <= '0;
-      mask_pnt_q         <= '0;
-      mask_queue_valid_q <= '0;
-      mask_ready_q       <= '0;
-    end else begin
-      mask_q             <= mask_d;
-      mask_pnt_q         <= mask_pnt_d;
-      mask_queue_valid_q <= mask_queue_valid_d;
-      mask_ready_q       <= mask_ready_d;
-    end
-  end
-
-  ///////////////////
-  //  NP2 Support  //
-  ///////////////////
-
-  // The SLDU only supports powers of two (p2) strides
-  // Decompose the non-power-of-two (np2) slide in multiple p2 slides
-
-  // We implement the np2 support here and fully process every input packet
-  // singularly to comply with the undisturbed policy. We cannot use the VRF
-  // as intermediate buffer; each VRF write is a commit.
+  assign mask_ready_o = mask_ready_d & mask_valid_i & ~vinsn_issue_q.vm & vinsn_issue_valid_q & !(vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu});
 
   typedef logic [idx_width(8*NrLanes)-1:0] stride_t;
-
-  // stride_t                                  p2_stride_gen_stride_d;
-  // logic                                     p2_stride_gen_valid_d;
-  // logic                                     p2_stride_gen_update_d;
-  // logic [idx_width(idx_width(8*NrLanes)):0] p2_stride_gen_popc_q;
-  // stride_t                                  p2_stride_gen_stride_q;
-  // logic                                     p2_stride_gen_valid_q;
-
-  // p2_stride_gen #(
-  //   .NrLanes (NrLanes)
-  // ) i_p2_stride_gen (
-  //   .clk_i       (clk_i                 ),
-  //   .rst_ni      (rst_ni                ),
-  //   .stride_i    (p2_stride_gen_stride_d),
-  //   .valid_i     (p2_stride_gen_valid_d ),
-  //   .update_i    (p2_stride_gen_update_d),
-  //   .popc_o      (p2_stride_gen_popc_q  ),
-  //   .stride_p2_o (p2_stride_gen_stride_q),
-  //   .valid_o     (p2_stride_gen_valid_q )
-  // );
 
   //////////////////
   //  Reductions  //
@@ -366,8 +231,8 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
   ) i_slide_queue (
     .clk_i      (clk_i            ),
     .rst_ni     (rst_ni           ),
-    .flush_i    (/* Unused */     ),
-    .testmode_i (/* Unused */     ),
+    .flush_i    ('0               ),
+    .testmode_i ('0               ),
     .full_o     (slide_queue_full ),
     .empty_o    (slide_queue_empty),
     .usage_o    (/* Unused */     ),
@@ -384,8 +249,9 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
 
   // Input/output non-flat operands
   elen_t slide_fin;
-  elen_t shuffle_in, shuffle_out;
+  elen_t shuffle_out;
   elen_t slide_result;
+  elen_t write_back;
 
   // Input and output eew for reshuffling
   rvv_pkg::vew_e sld_eew_src;
@@ -396,7 +262,7 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
 
   // The SLDU slides by powers of two
   stride_t sld_slamt;
-  logic   [idx_width(StrbWidth)-1:0] shuffle_amt;
+  logic   [idx_width(StrbWidth)-1:0] shuffle_amt_d, shuffle_amt_q;
 
   // Max Slide: NrLanes/2, Min Slide: 0
   logic [idx_width(NrLanes)-1:0] amt_d, amt_q, slide_cnt_d, slide_cnt_q;
@@ -405,13 +271,36 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
 
   sldu_op_dp #(
   ) i_sldu_op_dp (
-    .op_i     (shuffle_in ),
-    .slamt_i  (shuffle_amt),
+    .op_i     (slide_fin  ),
+    .slamt_i  (shuffle_amt_q),
     .eew_src_i(sld_eew_src),
     .eew_dst_i(sld_eew_dst),
     .op_o     (shuffle_out)
   );
 
+  ///////////////////////
+  //  Write back FIFO  //
+  ///////////////////////
+
+  // Slide queue
+  logic  write_back_push, write_back_pop, write_back_empty, write_back_full;
+
+  fifo_v3 #(
+    .DATA_WIDTH (ELEN            ),
+    .DEPTH      (2               )
+  ) i_write_back (
+    .clk_i      (clk_i           ),
+    .rst_ni     (rst_ni          ),
+    .flush_i    ('0              ),
+    .testmode_i ('0              ),
+    .full_o     (write_back_full ),
+    .empty_o    (write_back_empty),
+    .usage_o    (/* Unused */    ),
+    .data_i     (slide_result    ),
+    .push_i     (write_back_push ),
+    .data_o     (write_back      ),
+    .pop_i      (write_back_pop  )
+  );
 
   //////////////////
   //  Slide unit  //
@@ -433,28 +322,34 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
 
   // Remaining bytes of the current instruction in the issue phase
   vlen_t issue_cnt_d, issue_cnt_q;
-  vlen_t mask_cnt_d, mask_cnt_q;
+  vlen_t slides_left_d, slides_left_q;
   logic  first_slide_d, first_slide_q;
-  logic  first_mask_d, first_mask_q;
+  logic  vslide1down_d, vslide1down_q;
+
+  // Every sldu always writes back twice to keep them in sync
+  logic wb_stall_d, wb_stall_q;
+  logic wb_first, wb_second;
+  logic wb_fin_d, wb_fin_q;
+  // logic sldu_sync_d;
 
   // Remaining bytes of the current instruction in the commit phase
   vlen_t commit_cnt_d, commit_cnt_q;
 
-  logic  [7:0] out_en_flat1, out_en_seq1, out_en_flat2, out_en_seq2;
-  strb_t       out_en1, out_en2;
+  logic  [7:0] out_en_flat, out_en_seq;
+  strb_t       out_en;
   
   // Pointers in the input operand and the output result
-  logic   [idx_width(NrLanes*StrbWidth):0] in_pnt_d, in_pnt_q;
+  logic   [idx_width(StrbWidth):0] in_pnt_d, in_pnt_q;
   logic   [idx_width(StrbWidth):0] out_pnt_d, out_pnt_q;
-  vaddr_t                                  vrf_pnt_d, vrf_pnt_q;
+  vaddr_t                          vrf_pnt_d, vrf_pnt_q;
 
   // Respected by default: input_limit_d  = 8*NrLanes + out_pnt_d - in_pnt_d;
   // To enforce: output_limit_d = out_pnt_d + issue_cnt_d;
   logic [idx_width(MAXVL+1):0] output_limit_d, output_limit_q;
 
-  logic sldu_valid_d, sldu_valid_q;
+  logic sldu_valid_prev_d, sldu_valid_next_d, sldu_valid_prev_q, sldu_valid_next_q;
   logic sldu_ready_d, sldu_ready_q;
-  logic slide_op_valid, slide_fin_valid, slide_fin_valid_next_cycle;
+  logic slide_op_valid;
   elen_t slide_op;
 
   always_comb begin
@@ -463,21 +358,23 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     slide_cnt_d            = slide_cnt_q;
     issue_cnt_d            = issue_cnt_q;
     first_slide_d          = first_slide_q;
-    first_mask_d           = first_mask_q;
     amt_d                  = amt_q;
     dir_d                  = dir_q;
     commit_cnt_d           = commit_cnt_q;
     vinsn_queue_d          = vinsn_queue_q;
     result_final_gnt_d     = result_final_gnt_q;
-    sldu_valid_d           = sldu_valid_q;
+    sldu_valid_prev_d      = sldu_valid_prev_q;
+    sldu_valid_next_d      = sldu_valid_next_q;
     sldu_ready_d           = sldu_ready_q;
     vrf_pnt_d              = vrf_pnt_q;
     output_limit_d         = output_limit_q;
-
-    mask_d                 = mask_q;
-    mask_pnt_d             = mask_pnt_q;
-    mask_cnt_d             = mask_cnt_q;
-    mask_queue_valid_d     = mask_queue_valid_q;
+    slides_left_d          = slides_left_q;
+    shuffle_amt_d          = shuffle_amt_q;
+    vslide1down_d          = vslide1down_q;
+    wb_fin_d               = wb_fin_q;
+    // sldu_sync_d            = sldu_sync_o;
+    in_pnt_d               = in_pnt_q;
+    out_pnt_d              = out_pnt_q;
 
     result_queue_d           = result_queue_q;
     result_queue_valid_d     = result_queue_valid_q;
@@ -485,18 +382,22 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     result_queue_write_pnt_d = result_queue_write_pnt_q;
     result_queue_cnt_d       = result_queue_cnt_q;
 
-    slide_fin_valid        = 1'b0;
     slide_queue_push       = 1'b0;
     slide_queue_pop        = 1'b0;
     sldu_operand_ready_o   = 1'b0;
     mask_ready_d           = 1'b0;
+    write_back_push        = 1'b0;
+    write_back_pop         = 1'b0;
+    wb_stall_d             = 1'b0;
+    wb_first               = 1'b0;
+    sldu_sync_start_o      = 1'b0;
+    sldu_sync_fin_o        = 1'b0;
     pe_resp                = '0;
-    out_en_flat1           = '0;
-    out_en_seq1            = '0;
-    out_en1                = '0;
-    out_en_flat2           = '0;
-    out_en_seq2            = '0;
-    out_en2                = '0;
+    out_en_flat            = '0;
+    out_en_seq             = '0;
+    out_en                 = '0;
+    slide_fin              = '0;
+    slide_queue_in         = '0;
 
     // Vector instructions currently running
     vinsn_running_d = vinsn_running_q & pe_vinsn_running_i;
@@ -512,17 +413,17 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     sld_slamt   = stride_t'(vinsn_issue_q.stride >> vinsn_issue_q.vtype.vsew);
     // shuffle_amt = vinsn_issue_q.op == VSLIDEUP ? int'(out_pnt_q >> vinsn_issue_q.vtype.vsew)
     //                                            : 8 - int'(out_pnt_q >> vinsn_issue_q.vtype.vsew);
-    shuffle_amt = int'(out_pnt_q >> vinsn_issue_q.vtype.vsew);
+    // shuffle_amt = int'(out_pnt_q >> vinsn_issue_q.vtype.vsew);
 
     // New operand from lane op queue
-    slide_op_valid = sldu_operand_target_fu_i == ALU_SLDU ? sldu_operand_valid_i : 1'b0;          // may need a pipeline register
-    slide_op       = sldu_operand_i;                                                              // same
+    slide_op_valid = sldu_operand_target_fu_i == ALU_SLDU ? sldu_operand_valid_i : 1'b0;
+    slide_op       = sldu_operand_i;
 
     // Outputs
-    sldu_prev_valid_o = sldu_valid_q;
-    sldu_next_valid_o = sldu_valid_q;
-    sldu_prev_ready_o = sldu_ready_q;
-    sldu_next_ready_o = sldu_ready_q;
+    sldu_prev_valid_o = sldu_valid_prev_q && ~write_back_full;
+    sldu_next_valid_o = sldu_valid_next_q && ~write_back_full;
+    sldu_prev_ready_o = sldu_ready_q && ~write_back_full;
+    sldu_next_ready_o = sldu_ready_q && ~write_back_full;
     sldu_prev_data_o  = slide_queue_out;
     sldu_next_data_o  = slide_queue_out;
 
@@ -532,7 +433,7 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
 
     unique case (slide_state_q)
       SLIDE_IDLE: begin
-        if (slide_op_valid && vinsn_issue_valid_q && slide_queue_empty) begin
+        if (slide_op_valid && vinsn_issue_valid_q && ~sldu_sync_i) begin //&& ~wb_fin_q && write_back_empty 
 
           // Calculate slide amount and direction from instruction
           // amt means to which lane the element needs to go and dir is wether we slide to next or prev lane
@@ -541,7 +442,9 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
           // dir_d = vinsn_issue_q.op == VSLIDEDOWN ? sld_slamt[idx_width(NrLanes)-2] :
           //                           sld_slamt[idx_width(NrLanes)-1] ^ 1'b1;
           vrf_pnt_d = '0;
-
+          // sldu_sync_d = 1'b1;
+          sldu_sync_start_o = 1'b1;
+          
 
           unique case (vinsn_issue_q.op)
             VSLIDEUP: begin
@@ -559,16 +462,17 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
               out_pnt_d = slamt[idx_width(NrLanes)+3:idx_width(NrLanes)];
               if (lane_id_i <= slamt[idx_width(NrLanes)-1:0])
                 out_pnt_d += 1;
+              shuffle_amt_d = out_pnt_d;
               out_pnt_d = out_pnt_d << vinsn_issue_q.vtype.vsew;
 
               // Initialize counters
               issue_cnt_d = vinsn_issue_q.vl << int'(vinsn_issue_q.vtype.vsew);
               issue_cnt_d = issue_cnt_d >> $clog2(NrLanes);
-              mask_cnt_d  = issue_cnt_d;
 
               // Initialize be-enable-generation ancillary signals
               // output_limit_d = vinsn_issue_q.use_scalar_op ? out_pnt_d + issue_cnt_d/NrLanes : issue_cnt_d/NrLanes;
-              output_limit_d = '1;
+              output_limit_d = issue_cnt_d;
+              slides_left_d  = issue_cnt_d;
 
               // Trim vector elements which are not touched by the slide unit
               // issue_cnt_d -= vinsn_issue_q.stride[$bits(issue_cnt_d)-1:0];
@@ -577,40 +481,80 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
               vrf_pnt_d = vinsn_issue_q.stride >> $clog2(8*NrLanes);
 
               // Only needed for vslide1up to write the first element
-              // first_slide_d = vinsn_issue_q.use_scalar_op && lane_id_i == 0 ? 1'b1 : 1'b0;
-              if (vinsn_issue_q.use_scalar_op && lane_id_i == 0) begin
-                first_slide_d = 1'b1;
-                // if (vinsn_issue_q.vtype.vsew == EW64)
-                //   issue_cnt_d += 8;
-              end else begin
-                first_slide_d = 1'b0;
-              end
+              first_slide_d = vinsn_issue_q.use_scalar_op && lane_id_i == 0 ? 1'b1 : 1'b0;
+              // if (vinsn_issue_q.use_scalar_op && lane_id_i == 0) begin
+              //   first_slide_d = 1'b1;
+              // end else begin
+              //   first_slide_d = 1'b0;
+              // end
             end
             VSLIDEDOWN: begin
               automatic int last_line = vinsn_issue_q.vl[idx_width(NrLanes)-1:0] - 1;
               automatic int slamt = sld_slamt;
+              automatic int extra_stride;
+              automatic int tot_vl;
               amt_d = sld_slamt[idx_width(NrLanes)-1:0];
               // vslidedown starts reading the source operand from the slide offset
-              in_pnt_d  = vinsn_issue_q.stride[idx_width(8*NrLanes)-1:0];
+              if (vinsn_issue_q.vtype.vsew != EW64) begin
+                in_pnt_d = int'(slamt[idx_width(NrLanes)+3:idx_width(NrLanes)] << vinsn_issue_q.vtype.vsew);
+                // not all lanes start from the same offset
+                if (sld_slamt[idx_width(NrLanes)-1:0] >= NrLanes - lane_id_i)
+                  in_pnt_d += int'(1 << vinsn_issue_q.vtype.vsew);
+              // special case for EW64
+              end else begin
+                  in_pnt_d = (sld_slamt[idx_width(NrLanes)-1:0] >= NrLanes - lane_id_i) ? 8 : 0;
+              end
+              // shuffle_amt_d = 8 - in_pnt_d;
+              // if (vinsn_issue_q.vtype.vsew == EW64 && vinsn_issue_q.stride != 0)
+              //   in_pnt_d = 8 - in_pnt_d;
+              shuffle_amt_d = int'((8 - in_pnt_d) >> vinsn_issue_q.vtype.vsew);
+              // if (vinsn_issue_q.vtype.vsew == EW64 && shuffle_amt_d == 0)
+              //   in_pnt_d = 8 - in_pnt_d;
+
               // vslidedown starts writing the destination vector at its beginning
-              // out_pnt_d = 8 - slamt[idx_width(NrLanes)+3:idx_width(NrLanes)];
-              // if (lane_id_i + 1 >= NrLanes - slamt[idx_width(NrLanes)-1:0])
-              //   out_pnt_d -= 1;
-              // out_pnt_d = out_pnt_d << vinsn_issue_q.vtype.vsew;
-              out_pnt_d = 8 - int'(slamt[idx_width(NrLanes)+3:idx_width(NrLanes)] << vinsn_issue_q.vtype.vsew);
-              if (sld_slamt[idx_width(NrLanes)-1:0] >= NrLanes - lane_id_i)
-                out_pnt_d -= int'(1 << vinsn_issue_q.vtype.vsew);
+              out_pnt_d = '0;
 
               // Initialize counters
+
+              // The stride move the initial address in boundaries of 8*NrLanes Byte.
+              // If the stride is not multiple of a full VRF word (8*NrLanes Byte),
+              // we must request it as well from the VRF
+
+              // Find the number of extra elements to ask, related to the stride
+              unique case (vinsn_issue_q.vtype.vsew)
+                EW8 : extra_stride = slamt[$clog2(8*NrLanes)-1:0];
+                EW16: extra_stride = {1'b0, slamt[$clog2(4*NrLanes)-1:0]};
+                EW32: extra_stride = {2'b0, slamt[$clog2(2*NrLanes)-1:0]};
+                EW64: extra_stride = {3'b0, slamt[$clog2(1*NrLanes)-1:0]};
+                default:
+                  extra_stride = {3'b0, slamt[$clog2(1*NrLanes)-1:0]};
+              endcase
+
+              // Find the total number of elements to be asked
+              tot_vl = vinsn_issue_q.vl << int'(vinsn_issue_q.vtype.vsew);
+              if (!vinsn_issue_q.use_scalar_op)
+                tot_vl += extra_stride;
+              slides_left_d = tot_vl >> $clog2(NrLanes);
+              if (slides_left_d << $clog2(NrLanes) != tot_vl)
+                slides_left_d += 1 << int'(vinsn_issue_q.vtype.vsew);
+
               issue_cnt_d = vinsn_issue_q.vl << int'(vinsn_issue_q.vtype.vsew);
               issue_cnt_d = issue_cnt_d >> $clog2(NrLanes);
-              output_limit_d = issue_cnt_d;
+              // slides_left_d  = issue_cnt_d;
+              // if (vinsn_issue_q.stride[idx_width(NrLanes)-1:0] != 0 && ~vinsn_issue_q.use_scalar_op)
+              //   slides_left_d += 1 << int'(vinsn_issue_q.vtype.vsew);
+
               if (vinsn_issue_q.use_scalar_op && (last_line[idx_width(NrLanes)-1:0] == lane_id_i))
-                output_limit_d -= 1 << int'(vinsn_issue_q.vtype.vsew);
-              issue_cnt_d += out_pnt_d;
-              mask_cnt_d  = issue_cnt_d;
+                issue_cnt_d -= 1 << int'(vinsn_issue_q.vtype.vsew);
+
+              if (vinsn_issue_q.use_scalar_op && (last_line[idx_width(NrLanes)-1:0] == lane_id_i) && (vinsn_issue_q.vtype.vsew == EW64)) begin //
+                vslide1down_d = 1'b1;
+                issue_cnt_d += 8;
+              end
+              output_limit_d = issue_cnt_d;
 
               first_slide_d = 1'b1;
+              wb_fin_d = 1'b1;
 
               // Initialize be-enable-generation ancillary signals
               // output_limit_d = vinsn_issue_q.use_scalar_op
@@ -625,86 +569,55 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
 
           if (amt_d == 0) begin
             slide_state_d = SLIDE_NO_SLIDE;
-          end else if (amt_d == 1 || (NrLanes - amt_d) == 1) begin
-            slide_state_d = SLIDE_LAST;
-            // Load the first operand into the slide queue
-            sldu_operand_ready_o = 1'b1;                                           // may need register
-            slide_cnt_d = '0;
-            slide_queue_in = slide_op;
-            slide_queue_push = 1'b1;
-            sldu_valid_d = 1'b1;
           end else begin
-            slide_state_d = SLIDE_RUN;
+            slide_state_d = (amt_d == 1 || (NrLanes - amt_d) == 1) ? SLIDE_LAST : SLIDE_RUN;
             // Load the first operand into the slide queue
             sldu_operand_ready_o = 1'b1;                                           // may need register
             slide_cnt_d = '0;
             slide_queue_in = slide_op;
             slide_queue_push = 1'b1;
-            sldu_valid_d = 1'b1;
+            sldu_ready_d = 1'b1;
+            // slides_left_d = slides_left_d < 8 ? 0 : slides_left_d - 8;
+            if (amt_d[idx_width(NrLanes)-1])
+              sldu_valid_next_d = 1'b1;
+            if (~amt_d[idx_width(NrLanes)-1])
+              sldu_valid_prev_d = 1'b1;
           end
-
-          if (~vinsn_issue_q.vm)
-            first_mask_d = 1'b1;
         end
       end
       SLIDE_NO_SLIDE: begin
-        if (slide_op_valid && vinsn_issue_valid_q && ~slide_queue_full && (vinsn_issue_q.vm || (mask_queue_valid_q[mask_pnt_q] && (mask_queue_valid_q[mask_pnt_q + 1] || issue_cnt_q < 9)))) begin
+        if (~write_back_full && slide_op_valid && vinsn_issue_valid_q) begin
           slide_fin = slide_op;
-          slide_fin_valid = 1'b1;
+          write_back_push = 1'b1;
           sldu_operand_ready_o = 1'b1;                                             // may need register
-          if (issue_cnt_q <= 8 || output_limit_q <= out_pnt_q) begin
-            slide_state_d = SLIDE_IDLE;
-          end
-        end else if (issue_cnt_q <= 8 || output_limit_q <= out_pnt_q) begin
+          slides_left_d = slides_left_q < 8 ? 0 : slides_left_q - 8;
+        end else if (slides_left_q == 0) begin
             slide_state_d = SLIDE_IDLE;
         end
-
-        // // No slide needed? Operand direclty goes into the shuffle stage
-        // if (amt_q == 0) begin                                    // all slides with amt=0 should be handled by this
-        //   slide_fin = slide_op;
-        //   slide_fin_valid = 1'b1;                                //ins finish? SLIDE_IDLE
-
-        // // Slide gets started
-        // end else begin                                           // TODO: lookahed handshake -> direct slide without waiting 1 cycle
-        //   slide_cnt_d = '0;
-        //   slide_queue_in = slide_op;
-        //   slide_queue_push = 1'b1;
-        //   sldu_valid_d = 1'b1;
-
-        //   slide_state_d = (amt_q == 1) ? SLIDE_LAST : SLIDE_RUN;
-        // end
       end
       SLIDE_RUN: begin
         // Slide to next lane
         if (amt_q[idx_width(NrLanes)-1]) begin
-          // Set the output to the next lane valid
-          if (sldu_next_valid_o) begin
-            slide_queue_pop = 1'b1;
-            sldu_valid_d = 1'b0;
-          end
           // Get the operand from the prev lane
-          if (sldu_prev_valid_i) begin
+          if (sldu_prev_valid_i && sldu_ready_q && sldu_next_ready_i && sldu_valid_next_q) begin
             slide_queue_in = sldu_prev_data_i;
-            slide_queue_push = 1'b1;
             slide_cnt_d += 1;
-            sldu_valid_d = 1'b1;
+            slide_queue_push = 1'b1;
+            slide_queue_pop = 1'b1;
+            // sldu_valid_next_d = 1'b1;
             if (slide_cnt_q + 2 == amt_q) begin
               slide_state_d = SLIDE_LAST;
             end
           end
         // Slide to prev lane
         end else begin
-          // Set the output to the prev lane valid
-          if(sldu_prev_valid_o) begin
-            slide_queue_pop = 1'b1;
-            sldu_valid_d = 1'b0;
-          end
           // Get the operand from the next lane
-          if(sldu_next_valid_i) begin
+          if(sldu_next_valid_i && sldu_ready_q && sldu_prev_ready_i && sldu_valid_prev_q) begin
             slide_queue_in = sldu_next_data_i;
-            slide_queue_push = 1'b1;
             slide_cnt_d += 1;
-            sldu_valid_d = 1'b1;
+            slide_queue_push = 1'b1;
+            slide_queue_pop = 1'b1;
+            // sldu_valid_prev_d = 1'b1;
             if (slide_cnt_q + 2 == amt_q) begin
               slide_state_d = SLIDE_LAST;
             end
@@ -712,129 +625,150 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
         end
       end
       SLIDE_LAST: begin
-        if (vinsn_issue_q.vm || (mask_queue_valid_q[mask_pnt_q] && (mask_queue_valid_q[mask_pnt_q + 1] || issue_cnt_q < 9))) begin
-          if (amt_q[idx_width(NrLanes)-1] && sldu_prev_valid_i) begin
+        if (~write_back_full && (slides_left_q != 0 || ~slide_queue_empty)) begin
+          if (amt_q[idx_width(NrLanes)-1] && sldu_prev_valid_i && sldu_ready_q) begin
             // Slide from prev lane and finish
             slide_fin = sldu_prev_data_i;
-            slide_fin_valid = 1'b1;
-          end else if (~amt_q[idx_width(NrLanes)-1] && sldu_next_valid_i) begin
+            write_back_push = 1'b1;
+            sldu_ready_d = 1'b0;
+            slides_left_d = slides_left_q < 8 ? 0 : slides_left_q - 8;
+          end else if (~amt_q[idx_width(NrLanes)-1] && sldu_next_valid_i && sldu_ready_q) begin
             // Slide from next lane and finish
             slide_fin = sldu_next_data_i;
-            slide_fin_valid = 1'b1;
+            write_back_push = 1'b1;
+            sldu_ready_d = 1'b0;
+            slides_left_d = slides_left_q < 8 ? 0 : slides_left_q - 8;
           end
-          // Pop the element if the other lane received it
-          if (amt_q[idx_width(NrLanes)-1] && sldu_next_valid_o) begin
+          if (amt_q[idx_width(NrLanes)-1] && sldu_valid_next_q && sldu_next_ready_i) begin
+            sldu_valid_next_d = 1'b0;
             slide_queue_pop = 1'b1;
-            sldu_valid_d = 1'b0;
-          end else if (~amt_q[idx_width(NrLanes)-1] && sldu_prev_valid_o) begin
+          end else if (~amt_q[idx_width(NrLanes)-1] && sldu_valid_prev_q && sldu_prev_ready_i) begin
+            sldu_valid_prev_d = 1'b0;
             slide_queue_pop = 1'b1;
-            sldu_valid_d = 1'b0;
           end
           // Start a new slide
-          if (slide_op_valid && vinsn_issue_valid_q && ~slide_queue_full && output_limit_q > 8) begin
-            sldu_operand_ready_o = 1'b1;                                           // may need register
+          if (slide_op_valid && vinsn_issue_valid_q && slide_queue_empty && slides_left_d > 0 && ~sldu_ready_q) begin //~slide_queue_full
+            // slides_left_d = slides_left_q < 8 ? 0 : slides_left_q - 8;
+            sldu_operand_ready_o = 1'b1;
             slide_cnt_d = '0;
             slide_queue_in = slide_op;
             slide_queue_push = 1'b1;
-            sldu_valid_d = 1'b1;
+            sldu_ready_d = 1'b1;
+            if (amt_q[idx_width(NrLanes)-1])
+              sldu_valid_next_d = 1'b1;
+            if (~amt_q[idx_width(NrLanes)-1])
+              sldu_valid_prev_d = 1'b1;
 
-            slide_state_d = (amt_d == 1 || (NrLanes - amt_d) == 1) ? SLIDE_LAST : SLIDE_RUN;
-          end else if (issue_cnt_q <= 8 || output_limit_q <= 8) begin
-            slide_state_d = SLIDE_IDLE;                                            // just for testing could be to soon if next op isnt ready
+            slide_state_d = (amt_q == 1 || (NrLanes - amt_q) == 1) ? SLIDE_LAST : SLIDE_RUN;
           end
+          // if (slides_left_q == 0 && ~(sldu_ready_q && sldu_valid_next_q && sldu_valid_prev_q)) begin
+          //   if (~vslide1down_q) begin
+          //     slide_state_d = SLIDE_IDLE;
+          //     if (~slide_queue_empty)
+          //       slide_queue_pop = 1'b1;
+          //   end else begin
+          //     write_back_push = 1'b1;
+          //     vslide1down_d = 1'b0;
+          //   end
+          // end
+        // end
+        end else if (slides_left_q == 0 && ~vslide1down_q && ~write_back_full) begin
+          slide_state_d = SLIDE_IDLE;
+          // if (~slide_queue_empty) begin
+          //   slide_queue_pop = 1'b1;
+          // end
+        end else if (slides_left_q == 0 && vslide1down_q && ~write_back_full) begin
+          write_back_push = 1'b1;
+          vslide1down_d = 1'b0;
         end
       end
     endcase
 
-    //////////////////////
-    //  Shuffle & Mask  //
-    //////////////////////
-
-    shuffle_in = slide_fin;
-
     if (sld_dir) begin
-      slide_result = lane_id_i < sld_slamt ? shuffle_out : shuffle_in;
+      slide_result = lane_id_i < sld_slamt ? shuffle_out : slide_fin;
     end else begin
-      slide_result = NrLanes-1 - lane_id_i < sld_slamt ? shuffle_out : shuffle_in;
-    end
-
-    if (~vinsn_issue_q.vm && mask_valid) begin
-      if (first_mask_q) begin
-        mask_d[mask_pnt_q] = mask_i;
-        mask_queue_valid_d[mask_pnt_q] = 1'b1;
-        first_mask_d = 1'b0;
-        mask_cnt_d = mask_cnt_q > 7 ? mask_cnt_q - 8 : '0;
-        mask_ready_d = mask_cnt_q > 0 ? 1'b1 : 1'b0;
-      end else if (mask_cnt_q > 0 && !mask_queue_valid_d[mask_pnt_q + 1]) begin
-        mask_d[mask_pnt_q + 1] = mask_i;
-        mask_queue_valid_d[mask_pnt_q + 1] = 1'b1;
-        mask_cnt_d = mask_cnt_q > 7 ? mask_cnt_q - 8 : '0;
-        mask_ready_d = mask_cnt_q > 0 ? 1'b1 : 1'b0;
-      end
+      slide_result = NrLanes-1 - lane_id_i < sld_slamt ? shuffle_out : slide_fin;
     end
 
     /////////////////////////////
     //  Write to result queue  //
     /////////////////////////////
 
-    if (slide_fin_valid) begin
-      if (vinsn_issue_q.op == VSLIDEUP) begin
-        // If this is a vslide1up instruction, copy the scalar operand to the first word
-        if (first_slide_q) begin
-          first_slide_d = 1'b0;
-          unique case (vinsn_issue_q.vtype.vsew)
-            EW8: begin
-              result_queue_d[result_queue_write_pnt_q].wdata[7:0] =
-                vinsn_issue_q.scalar_op[7:0];
-              result_queue_d[result_queue_write_pnt_q].be[0:0] =
-                vinsn_issue_q.vm || mask_q[mask_pnt_q][0];
-            end
-            EW16: begin
-              result_queue_d[result_queue_write_pnt_q].wdata[15:0] =
-                vinsn_issue_q.scalar_op[15:0];
-              result_queue_d[result_queue_write_pnt_q].be[1:0] =
-                {2{vinsn_issue_q.vm || mask_q[mask_pnt_q][0]}};
-            end
-            EW32: begin
-              result_queue_d[result_queue_write_pnt_q].wdata[31:0] =
-                vinsn_issue_q.scalar_op[31:0];
-              result_queue_d[result_queue_write_pnt_q].be[3:0] =
-                {4{vinsn_issue_q.vm || mask_q[mask_pnt_q][0]}};
-            end
-            EW64: begin
-              result_queue_d[result_queue_write_pnt_q].wdata[63:0] =
-                vinsn_issue_q.scalar_op[63:0];
-              result_queue_d[result_queue_write_pnt_q].be[7:0] =
-                {8{vinsn_issue_q.vm || mask_q[mask_pnt_q][0]}};
-            end
-          endcase
+    if (wb_stall_q)
+      write_back_pop = 1'b1;
+
+    if (~result_queue_full && ~write_back_empty && (vinsn_issue_q.vm || mask_valid) && ~wb_stall_q) begin
+      // How many bytes are we copying from the operand to the destination, in this cycle?
+      automatic int in_byte_count = 8 - in_pnt_q;
+      automatic int out_byte_count = 8 - out_pnt_q;
+      automatic int byte_count = in_byte_count < out_byte_count ? in_byte_count : out_byte_count;
+      automatic int first_slide_byte_count = (first_slide_q && vinsn_issue_q.op == VSLIDEUP) ? byte_count + (1 << int'(vinsn_issue_q.vtype.vsew)) : byte_count;
+
+      if (byte_count == 8 && ~wb_second && ~(issue_cnt_q <= 16))
+        wb_stall_d = 1'b1;
+      if (~wb_second)
+        wb_first = 1'b1;
+
+      first_slide_d = 1'b0;
+
+      if (in_pnt_q == 0 && vinsn_issue_q.op == VSLIDEUP)
+        output_limit_d = output_limit_q < 8 ? '0 : output_limit_q - 8;
+
+      if (in_pnt_q == 0 && vinsn_issue_q.op == VSLIDEDOWN)
+        output_limit_d = output_limit_q < 8 ? '0 : output_limit_q - 8;
+
+      if (first_slide_q && vinsn_issue_q.op == VSLIDEDOWN) begin
+        write_back_pop = 1'b1;
+        wb_stall_d = 1'b0;
+        wb_first = 1'b0;
+      end
+
+      // Build the sequential byte-output-enable
+      for (int unsigned b = 0; b < 8; b++)
+        if ((b >= out_pnt_q && b < output_limit_q) || vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})
+          out_en_seq[b] = 1'b1;
+
+      // Shuffle the output enable
+      for (int unsigned b = 0; b < 8; b++)
+        out_en_flat[shuffle_index(b, 1, vinsn_issue_q.vtype.vsew)] = out_en_seq[b];
+
+      // Mask the output enable with the mask vector
+      out_en = out_en_flat & ({8*NrLanes{vinsn_issue_q.vm | (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})}} | mask_i);
+
+      // Write in the correct bytes
+      for (int b = 0; b < 8; b++)
+        if (out_en[b]) begin
+          result_queue_d[result_queue_write_pnt_q].wdata[8*b +: 8] = write_back[8*b +: 8];
+          result_queue_d[result_queue_write_pnt_q].be[b]           = 1'b1;
         end
-        // Build the sequential byte-output-enable
-        for (int unsigned b = 0; b < 8; b++)
-          if ((b >= out_pnt_q && b < issue_cnt_q) || vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})
-            out_en_seq1[b] = 1'b1;
 
-        // Shuffle the output enable
-        for (int unsigned b = 0; b < 8; b++)
-          out_en_flat1[shuffle_index(b, 1, vinsn_issue_q.vtype.vsew)] = out_en_seq1[b];
+      // Initialize id and addr fields of the result queue requests
+      result_queue_d[result_queue_write_pnt_q].id   = vinsn_issue_q.id;
+      result_queue_d[result_queue_write_pnt_q].addr = vaddr(vinsn_issue_q.vd, NrLanes) + vrf_pnt_q;
 
-        // Mask the output enable with the mask vector
-        out_en1 = out_en_flat1 & ({8{vinsn_issue_q.vm | (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})}} | mask_q[mask_pnt_q]);
+      // Bump pointers (reductions always finish in one shot)
+      in_pnt_d    = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? 8               : in_pnt_q  + byte_count;
+      out_pnt_d   = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? 8               : out_pnt_q + byte_count;
+      issue_cnt_d = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? issue_cnt_q - 8 : issue_cnt_q - first_slide_byte_count;
+      // issue_cnt_d = (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} || slide_fin_valid_next_cycle) ? issue_cnt_q -8 : issue_cnt_q;
 
-        // Write in the correct bytes
-        for (int b = 0; b < 8; b++)
-          if (out_en1[b]) begin
-            result_queue_d[result_queue_write_pnt_q].wdata[8*b +: 8] = slide_result[8*b +: 8];
-            result_queue_d[result_queue_write_pnt_q].be[b]           = 1'b1;
-          end
+      // Read a full word from the VRF or finished the instruction
+      if (in_pnt_d == 8 || issue_cnt_q <= first_slide_byte_count) begin
+        // Reset the pointer
+        in_pnt_d = '0;
+        if (~wb_stall_d)
+          write_back_pop = 1'b1;
+      end
 
-        // Initialize id and addr fields of the result queue requests
-        result_queue_d[result_queue_write_pnt_q].id   = vinsn_issue_q.id;
-        result_queue_d[result_queue_write_pnt_q].addr = vaddr(vinsn_issue_q.vd, NrLanes) + vrf_pnt_q;
+      // Filled up a word to the VRF or finished the instruction
+      if ((out_pnt_d == 8 || issue_cnt_q <= byte_count) && output_limit_q != 0) begin //
+        // Reset the pointer
+        // out_pnt_d = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? {'0, red_stride_cnt_d, 3'b0} : '0;
+        out_pnt_d = '0;
 
-        issue_cnt_d = issue_cnt_q < 8 ? '0 : issue_cnt_q - 8;
-        mask_queue_valid_d[mask_pnt_q] = 1'b0;
-        mask_pnt_d  = mask_pnt_q + 1;
+        // We used all the bits of the mask
+        if (vinsn_issue_q.op inside {VSLIDEUP, VSLIDEDOWN})
+          mask_ready_d = !vinsn_issue_q.vm;
 
         // Increment VRF address
         vrf_pnt_d = vrf_pnt_q + 1;
@@ -845,304 +779,89 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
         result_queue_write_pnt_d                       = result_queue_write_pnt_q + 1;
         if (result_queue_write_pnt_q == ResultQueueDepth-1)
           result_queue_write_pnt_d = '0;
+      end
 
-        // Build the sequential byte-output-enable
-        for (int unsigned b = 0; b < 8; b++)
-          if ((b < out_pnt_q && b < issue_cnt_d) || vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})
-            out_en_seq2[b] = 1'b1;
+      // Finished the operation
+      if (issue_cnt_q <= first_slide_byte_count || (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} && issue_cnt_q <= 8)) begin
+        automatic int last_line = vinsn_issue_q.vl[idx_width(NrLanes)-1:0] - 1;
+        // automatic int tgt_lane = out_byte[3 +: $clog2(NrLanes)];
+        // automatic int tgt_lane_offset = out_byte[2:0];
+        // If this is a vslide1down, fill up the last position with the scalar operand
+        if (vinsn_issue_q.op == VSLIDEDOWN && vinsn_issue_q.use_scalar_op && (last_line[idx_width(NrLanes)-1:0] == lane_id_i)) begin
+          // Copy the scalar operand to the last word
+          automatic int out_seq_byte = output_limit_q;
+          automatic int out_byte = shuffle_index(out_seq_byte, 1, vinsn_issue_q.vtype.vsew);
 
-        // Shuffle the output enable
-        for (int unsigned b = 0; b < 8; b++)
-          out_en_flat2[shuffle_index(b, 1, vinsn_issue_q.vtype.vsew)] = out_en_seq2[b];
-
-        // Mask the output enable with the mask vector
-        out_en2 = out_en_flat2 & ({8*NrLanes{vinsn_issue_q.vm | (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})}} | mask_q[mask_pnt_d]);
-
-        // Write in the correct bytes
-        for (int b = 0; b < 8; b++)
-          if (out_en2[b]) begin
-            result_queue_d[result_queue_write_pnt_d].wdata[8*b +: 8] = slide_result[8*b +: 8];
-            result_queue_d[result_queue_write_pnt_d].be[b]           = 1'b1;
-          end
-
-        // Finished the operation
-        if (issue_cnt_q <= 8) begin
-          // Reset the logarighmic counter
-          // red_stride_cnt_d = 1;
-
-          // Increment vector instruction queue pointers and counters
-          vinsn_queue_d.issue_pnt += 1;
-          vinsn_queue_d.issue_cnt -= 1;
-        end
-      end else if (vinsn_issue_q.op == VSLIDEDOWN) begin
-        if (first_slide_q) begin
-          first_slide_d = 1'b0;
-        end else begin
-          // Build the sequential byte-output-enable
-          for (int unsigned b = 0; b < 8; b++)
-            if ((b >= out_pnt_q && b < output_limit_q && b < issue_cnt_q) || vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})
-              out_en_seq1[b] = 1'b1;
-
-          // Shuffle the output enable
-          for (int unsigned b = 0; b < 8; b++)
-            out_en_flat1[shuffle_index(b, 1, vinsn_issue_q.vtype.vsew)] = out_en_seq1[b];
-
-          // Mask the output enable with the mask vector
-          out_en1 = out_en_flat1 & ({8{vinsn_issue_q.vm | (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})}} | mask_q[mask_pnt_q]);
-
-          // Write in the correct bytes
-          for (int b = 0; b < 8; b++)
-            if (out_en1[b]) begin
-              result_queue_d[result_queue_write_pnt_q].wdata[8*b +: 8] = slide_result[8*b +: 8];
-              result_queue_d[result_queue_write_pnt_q].be[b]           = 1'b1;
+          unique case (vinsn_issue_q.vtype.vsew)
+            EW8: begin
+              result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 8]
+                = vinsn_issue_q.scalar_op[7:0];
+              result_queue_d[result_queue_write_pnt_q].be[out_byte +: 1] =
+                vinsn_issue_q.vm || mask_i[out_byte];
             end
-
-          issue_cnt_d = issue_cnt_q < 8 ? '0 : issue_cnt_q - 8;
-          output_limit_d = output_limit_q < 8 ? '0 : output_limit_q - 8;
-          mask_queue_valid_d[mask_pnt_q] = 1'b0;
-          mask_pnt_d  = mask_pnt_q + 1;
-
-          // Increment VRF address
-          vrf_pnt_d = vrf_pnt_q + 1;
-
-          // Send result to the VRF
-          result_queue_cnt_d += 1;
-          result_queue_valid_d[result_queue_write_pnt_q] = '1;
-          result_queue_write_pnt_d                       = result_queue_write_pnt_q + 1;
-          if (result_queue_write_pnt_q == ResultQueueDepth-1)
-            result_queue_write_pnt_d = '0;
+            EW16: begin
+              result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 16]
+                = vinsn_issue_q.scalar_op[15:0];
+              result_queue_d[result_queue_write_pnt_q].be[out_byte +: 2] =
+                {2{vinsn_issue_q.vm || mask_i[out_byte]}};
+            end
+            EW32: begin
+              result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 32]
+                = vinsn_issue_q.scalar_op[31:0];
+              result_queue_d[result_queue_write_pnt_q].be[out_byte +: 4] =
+                {4{vinsn_issue_q.vm || mask_i[out_byte]}};
+            end
+            EW64: begin
+              result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 64]
+                = vinsn_issue_q.scalar_op[63:0];
+              result_queue_d[result_queue_write_pnt_q].be[out_byte +: 8] =
+                {8{vinsn_issue_q.vm || mask_i[out_byte]}};
+            end
+          endcase
         end
+        // Reset the logarighmic counter
+        // // red_stride_cnt_d = 1;
 
-        // Initialize id and addr fields of the result queue requests
-        result_queue_d[result_queue_write_pnt_q].id   = vinsn_issue_q.id;
-        result_queue_d[result_queue_write_pnt_q].addr = vaddr(vinsn_issue_q.vd, NrLanes) + vrf_pnt_q;
+        // Only here in order to increase the issue_pnt only once
+        issue_cnt_d = 16;
 
-        // Build the sequential byte-output-enable
-        for (int unsigned b = 0; b < 8; b++)
-          if ((b < out_pnt_q && b < output_limit_d && b < issue_cnt_d) || vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})
-            out_en_seq2[b] = 1'b1;
+        // Increment vector instruction queue pointers and counters
+        vinsn_queue_d.issue_pnt += 1;
+        vinsn_queue_d.issue_cnt -= 1;
+        //wb_fin_d = 1'b0;
+      end
 
-        // Shuffle the output enable
-        for (int unsigned b = 0; b < 8; b++)
-          out_en_flat2[shuffle_index(b, 1, vinsn_issue_q.vtype.vsew)] = out_en_seq2[b];
-
-        // Mask the output enable with the mask vector
-        out_en2 = out_en_flat2 & ({8*NrLanes{vinsn_issue_q.vm | (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})}} | mask_q[mask_pnt_d]);
-
-        // Write in the correct bytes
-        for (int b = 0; b < 8; b++)
-          if (out_en2[b]) begin
-            result_queue_d[result_queue_write_pnt_d].wdata[8*b +: 8] = slide_result[8*b +: 8];
-            result_queue_d[result_queue_write_pnt_d].be[b]           = 1'b1;
+      // If this is a vslide1up instruction, copy the scalar operand to the first word
+      if (first_slide_q && vinsn_issue_q.op == VSLIDEUP) begin
+        // issue_cnt_d -= 1 << int'(vinsn_issue_q.vtype.vsew);
+        unique case (vinsn_issue_q.vtype.vsew)
+          EW8: begin
+            result_queue_d[result_queue_write_pnt_q].wdata[7:0] =
+              vinsn_issue_q.scalar_op[7:0];
+            result_queue_d[result_queue_write_pnt_q].be[0:0] =
+              vinsn_issue_q.vm || mask_i[0];
           end
-
-        // if (first_slide_q) begin
-        //   output_limit_d = output_limit_q > out_pnt_q ? output_limit_q - out_pnt_q : '0;
-        // end
-
-        // Finished the operation
-        if (output_limit_q <= 8 || ( output_limit_q <= out_pnt_q)) begin//first_slide_q &&
-          automatic int last_line = vinsn_issue_q.vl[idx_width(NrLanes)-1:0] - 1;
-          // If this is a vslide1down, fill up the last position with the scalar operand
-          if (vinsn_issue_q.use_scalar_op && (last_line[idx_width(NrLanes)-1:0] == lane_id_i)) begin
-            // Copy the scalar operand to the last word
-            automatic int out_seq_byte = output_limit_q;
-            automatic int out_byte = shuffle_index(out_seq_byte, 1, vinsn_issue_q.vtype.vsew);
-            // automatic int tgt_lane = out_byte[3 +: $clog2(NrLanes)];
-            automatic int tgt_lane_offset = out_byte[2:0];
-
-            unique case (vinsn_issue_q.vtype.vsew)
-              EW8: begin
-                result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 8]
-                  = vinsn_issue_q.scalar_op[7:0];
-                result_queue_d[result_queue_write_pnt_q].be[out_byte +: 1] =
-                  vinsn_issue_q.vm || mask_q[mask_pnt_q][out_byte];
-              end
-              EW16: begin
-                result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 16]
-                  = vinsn_issue_q.scalar_op[15:0];
-                result_queue_d[result_queue_write_pnt_q].be[out_byte +: 2] =
-                  {2{vinsn_issue_q.vm || mask_q[mask_pnt_q][out_byte]}};
-              end
-              EW32: begin
-                result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 32]
-                  = vinsn_issue_q.scalar_op[31:0];
-                result_queue_d[result_queue_write_pnt_q].be[out_byte +: 4] =
-                  {4{vinsn_issue_q.vm || mask_q[mask_pnt_q][out_byte]}};
-              end
-              EW64: begin
-                result_queue_d[result_queue_write_pnt_q].wdata[8*out_byte +: 64]
-                  = vinsn_issue_q.scalar_op[63:0];
-                result_queue_d[result_queue_write_pnt_q].be[out_byte +: 8] =
-                  {8{vinsn_issue_q.vm || mask_q[mask_pnt_q][out_byte]}};
-              end
-            endcase
+          EW16: begin
+            result_queue_d[result_queue_write_pnt_q].wdata[15:0] =
+              vinsn_issue_q.scalar_op[15:0];
+            result_queue_d[result_queue_write_pnt_q].be[1:0] =
+              {2{vinsn_issue_q.vm || mask_i[0]}};
           end
-          // Reset the logarighmic counter
-          // red_stride_cnt_d = 1;
-          // Send result to the VRF
-          result_queue_cnt_d += 1;
-          result_queue_valid_d[result_queue_write_pnt_q] = '1;
-          if (first_slide_q) begin
-            result_queue_write_pnt_d                       = result_queue_write_pnt_q + 1;
-            if (result_queue_write_pnt_q == ResultQueueDepth-1)
-              result_queue_write_pnt_d = '0;
+          EW32: begin
+            result_queue_d[result_queue_write_pnt_q].wdata[31:0] =
+              vinsn_issue_q.scalar_op[31:0];
+            result_queue_d[result_queue_write_pnt_q].be[3:0] =
+              {4{vinsn_issue_q.vm || mask_i[0]}};
           end
-
-          // Increment vector instruction queue pointers and counters
-          vinsn_queue_d.issue_pnt += 1;
-          vinsn_queue_d.issue_cnt -= 1;
-        end
+          EW64: begin
+            result_queue_d[result_queue_write_pnt_q].wdata[63:0] =
+              vinsn_issue_q.scalar_op[63:0];
+            result_queue_d[result_queue_write_pnt_q].be[7:0] =
+              {8{vinsn_issue_q.vm || mask_i[0]}};
+          end
+        endcase
       end
     end
-
-    // NEW FOR VSLIDEDOWN
-
-    // if (slide_fin_valid || slide_fin_valid_next_cycle) begin
-    // // if (slide_fin_valid || (slide_fin_valid_next_cycle && issue_cnt_q > 7)) begin
-    //   // How many bytes are we copying from the operand to the destination, in this cycle?
-    //   automatic int in_byte_count = 8 - in_pnt_q;
-    //   automatic int out_byte_count = 8 - out_pnt_q;
-    //   automatic int byte_count = in_byte_count < out_byte_count ? in_byte_count : out_byte_count;
-
-    //   // Build the sequential byte-output-enable
-    //   for (int unsigned b = 0; b < 8; b++)
-    //     if ((b >= out_pnt_q && b < issue_cnt_q) || vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})
-    //       out_en_seq[b] = 1'b1;
-
-    //   // // Build the sequential byte-output-enable
-    //   // for (int unsigned b = 0; b < 8; b++)
-    //   //   if ((((b >= out_pnt_q && slide_fin_valid) || (b < out_pnt_q && slide_fin_valid_next_cycle)) && b < output_limit_q) || vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})
-    //   //     out_en_seq[b] = 1'b1;
-
-    //   // Shuffle the output enable
-    //   for (int unsigned b = 0; b < 8; b++)
-    //     out_en_flat[shuffle_index(b, 1, vinsn_issue_q.vtype.vsew)] = out_en_seq[b];
-
-    //   // Mask the output enable with the mask vector
-    //   out_en = out_en_flat & ({8*NrLanes{vinsn_issue_q.vm | (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu})}} | mask_q);
-
-    //   // Write in the correct bytes
-    //   for (int b = 0; b < 8; b++)
-    //     if (out_en[b]) begin
-    //       result_queue_d[result_queue_write_pnt_q].wdata[8*b +: 8] = slide_result[8*b +: 8];
-    //       result_queue_d[result_queue_write_pnt_q].be[b]           = 1'b1;
-    //     end
-
-    //   // Initialize id and addr fields of the result queue requests
-    //   result_queue_d[result_queue_write_pnt_q].id   = vinsn_issue_q.id;
-    //   result_queue_d[result_queue_write_pnt_q].addr = vaddr(vinsn_issue_q.vd, NrLanes) + vrf_pnt_q;
-
-    //   // Bump pointers (reductions always finish in one shot)
-    //   in_pnt_d    = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? 8                  : in_pnt_q  + byte_count;
-    //   out_pnt_d   = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? 8                  : out_pnt_q + byte_count;
-    //   issue_cnt_d = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? issue_cnt_q - 8    : issue_cnt_q - byte_count;
-    //   // issue_cnt_d = (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} || slide_fin_valid_next_cycle) ? issue_cnt_q -8 : issue_cnt_q;
-
-    //   // Read a full word from the VRF or finished the instruction
-    //   if (in_pnt_d == 8 || issue_cnt_q <= byte_count) begin
-    //     // Reset the pointer
-    //     in_pnt_d = '0;
-    //   end
-
-    //   // Filled up a word to the VRF or finished the instruction
-    //   if (out_pnt_d == 8 || issue_cnt_q <= byte_count) begin
-    //     // Reset the pointer
-    //     // out_pnt_d = vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} ? {'0, red_stride_cnt_d, 3'b0} : '0;
-    //     out_pnt_d = '0;
-    //     // We used all the bits of the mask
-    //     if (vinsn_issue_q.op inside {VSLIDEUP, VSLIDEDOWN})
-    //       mask_ready_d = !vinsn_issue_q.vm;
-
-    //     // Increment VRF address
-    //     vrf_pnt_d = vrf_pnt_q + 1;
-
-    //     // Send result to the VRF
-    //     result_queue_cnt_d += 1;
-    //     result_queue_valid_d[result_queue_write_pnt_q] = '1;
-    //     result_queue_write_pnt_d                       = result_queue_write_pnt_q + 1;
-    //     if (result_queue_write_pnt_q == ResultQueueDepth-1)
-    //       result_queue_write_pnt_d = '0;
-    //   end
-
-    //   // Finished the operation
-    //   if (issue_cnt_q <= byte_count || (vinsn_issue_q.vfu inside {VFU_Alu, VFU_MFpu} && issue_cnt_q <= 8)) begin
-    //     // Reset the logarighmic counter
-    //     // red_stride_cnt_d = 1;
-
-    //     // Increment vector instruction queue pointers and counters
-    //     vinsn_queue_d.issue_pnt += 1;
-    //     vinsn_queue_d.issue_cnt -= 1;
-    //   end
-
-    //   // If this is a vslide1up instruction, copy the scalar operand to the first word
-    //   if (first_slide_q) begin
-    //     first_slide_d = 1'b0;
-    //     unique case (vinsn_issue_q.vtype.vsew)
-    //       EW8: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[7:0] =
-    //           vinsn_issue_q.scalar_op[7:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[0:0] =
-    //           vinsn_issue_q.vm || mask_q[0][0];
-    //       end
-    //       EW16: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[15:0] =
-    //           vinsn_issue_q.scalar_op[15:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[1:0] =
-    //           {2{vinsn_issue_q.vm || mask_q[0][0]}};
-    //       end
-    //       EW32: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[31:0] =
-    //           vinsn_issue_q.scalar_op[31:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[3:0] =
-    //           {4{vinsn_issue_q.vm || mask_q[0][0]}};
-    //       end
-    //       EW64: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[63:0] =
-    //           vinsn_issue_q.scalar_op[63:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[7:0] =
-    //           {8{vinsn_issue_q.vm || mask_q[0][0]}};
-    //         // issue_cnt_d += 8;
-    //       end
-    //     endcase
-    //   end
-
-    //   // If this is a vslide1down, fill up the last position with the scalar operand
-    //   if (vinsn_issue_q.op == VSLIDEDOWN && vinsn_issue_q.use_scalar_op && (issue_cnt_q == lane_id_i)) begin
-    //     // Copy the scalar operand to the last word
-    //     automatic int out_seq_byte = issue_cnt_q;
-    //     automatic int out_byte = shuffle_index(out_seq_byte, 1, vinsn_issue_q.vtype.vsew);
-    //     automatic int tgt_lane = out_byte[3 +: $clog2(NrLanes)];
-    //     automatic int tgt_lane_offset = out_byte[2:0];
-
-    //     unique case (vinsn_issue_q.vtype.vsew)
-    //       EW8: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[8*tgt_lane_offset +: 8]
-    //           = vinsn_issue_q.scalar_op[7:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[tgt_lane_offset +: 1] =
-    //           vinsn_issue_q.vm || mask_q[tgt_lane][tgt_lane_offset];
-    //       end
-    //       EW16: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[8*tgt_lane_offset +: 16]
-    //           = vinsn_issue_q.scalar_op[15:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[tgt_lane_offset +: 2] =
-    //           {2{vinsn_issue_q.vm || mask_q[tgt_lane][tgt_lane_offset]}};
-    //       end
-    //       EW32: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[8*tgt_lane_offset +: 32]
-    //           = vinsn_issue_q.scalar_op[31:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[tgt_lane_offset +: 4] =
-    //           {4{vinsn_issue_q.vm || mask_q[tgt_lane][tgt_lane_offset]}};
-    //       end
-    //       EW64: begin
-    //         result_queue_d[result_queue_write_pnt_q].wdata[8*tgt_lane_offset +: 64]
-    //           = vinsn_issue_q.scalar_op[63:0];
-    //         result_queue_d[result_queue_write_pnt_q].be[tgt_lane_offset +: 8] =
-    //           {8{vinsn_issue_q.vm || mask_q[tgt_lane][tgt_lane_offset]}};
-    //       end
-    //     endcase
-    //   end
-    // end
 
   //////////////////
   //  Slide unit  //
@@ -1618,14 +1337,18 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
 
         // Decrement the counter of remaining vector elements waiting to be written
         commit_cnt_d = commit_cnt_q - 8;
-        if (commit_cnt_q < 8)
+        if (commit_cnt_q <= 8) begin
           commit_cnt_d = '0;
+          wb_fin_d = 1'b0;
+        end
       end
 
     // Finished committing the results of a vector instruction
     if (vinsn_commit_valid && commit_cnt_d == '0) begin
       // Mark the vector instruction as being done
       pe_resp.vinsn_done[vinsn_commit.id] = 1'b1;
+      // sldu_sync_d = 1'b0;
+      sldu_sync_fin_o = 1'b1;
 
       // Update the commit counters and pointers
       vinsn_queue_d.commit_cnt -= 1;
@@ -1639,6 +1362,7 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
         commit_cnt_d = vinsn_queue_q.vinsn[vinsn_queue_d.commit_pnt].op inside {VSLIDEUP, VSLIDEDOWN}
                      ? vinsn_queue_q.vinsn[vinsn_queue_d.commit_pnt].vl << int'(vinsn_queue_q.vinsn[vinsn_queue_d.commit_pnt].vtype.vsew)
                      : (NrLanes * ($clog2(NrLanes) + 1)) << EW64;
+        commit_cnt_d = commit_cnt_d >> $clog2(NrLanes);
 
         // Trim vector elements which are not written by the slide unit
         if (vinsn_queue_q.vinsn[vinsn_queue_d.commit_pnt].op == VSLIDEUP)
@@ -1687,7 +1411,6 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
     if (!rst_ni) begin
       vinsn_running_q       <= '0;
       issue_cnt_q           <= '0;
-      mask_cnt_q            <= '0;
       commit_cnt_q          <= '0;
       in_pnt_q              <= '0;
       out_pnt_q             <= '0;
@@ -1699,16 +1422,21 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
       // red_stride_cnt_q      <= 1;
       slide_cnt_q           <= '0;
       first_slide_q         <= '0;
-      first_mask_q          <= '0;
       amt_q                 <= '0;
       dir_q                 <= '0;
-      sldu_valid_q          <= '0;
+      sldu_valid_prev_q     <= '0;
+      sldu_valid_next_q     <= '0;
       sldu_ready_q          <= '0;
-      slide_fin_valid_next_cycle <= '0;
+      wb_stall_q            <= '0;
+      wb_second             <= '0;
+      slides_left_q         <= '0;
+      shuffle_amt_q         <= '0;
+      vslide1down_q         <= '0;
+      wb_fin_q              <= '0;
+      // sldu_sync_o           <= '0;
     end else begin
       vinsn_running_q       <= vinsn_running_d;
       issue_cnt_q           <= issue_cnt_d;
-      mask_cnt_q            <= mask_cnt_d;
       commit_cnt_q          <= commit_cnt_d;
       in_pnt_q              <= in_pnt_d;
       out_pnt_q             <= out_pnt_d;
@@ -1720,12 +1448,18 @@ module sldu import ara_pkg::*; import rvv_pkg::*; #(
       // red_stride_cnt_q      <= red_stride_cnt_d;
       slide_cnt_q           <= slide_cnt_d;
       first_slide_q         <= first_slide_d;
-      first_mask_q          <= first_mask_d;
       amt_q                 <= amt_d;
       dir_q                 <= dir_d;
-      sldu_valid_q          <= sldu_valid_d;
+      sldu_valid_prev_q     <= sldu_valid_prev_d;
+      sldu_valid_next_q     <= sldu_valid_next_d;
       sldu_ready_q          <= sldu_ready_d;
-      slide_fin_valid_next_cycle <= slide_fin_valid;
+      wb_stall_q            <= wb_stall_d;
+      wb_second             <= wb_first;
+      slides_left_q         <= slides_left_d;
+      shuffle_amt_q         <= shuffle_amt_d;
+      vslide1down_q         <= vslide1down_d;
+      wb_fin_q              <= wb_fin_d;
+      // sldu_sync_o           <= sldu_sync_d;
     end
   end
 
